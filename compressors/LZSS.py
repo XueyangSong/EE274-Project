@@ -6,8 +6,9 @@ import functools
 SIZE_BYTE = 32
 
 class LZSSEncoder(DataEncoder):
-    def __init__(self, type):
+    def __init__(self, type, binary_type):
         self.type = type
+        self.binary_type = binary_type
     """
     Construct one possible encoding table
     Args:
@@ -19,7 +20,7 @@ class LZSSEncoder(DataEncoder):
         Format of output table:
         Unmatched literals | Match length | Match offset
     """
-    def encode_literal(self, s, type) -> list:
+    def encode_literal(self, s) -> list:
         table = []
         search_idx, match_idx = 0, 1
         unmatched = s[0]
@@ -32,7 +33,7 @@ class LZSSEncoder(DataEncoder):
                 table.append([unmatched, match_length, match_offset])
                 unmatched = ""
                 match_idx += match_length
-        if type == "merged":
+        if self.type == "merged":
             merged_table = []
             merged_table.append(table[0])
             for i in range(1, len(table)):
@@ -91,8 +92,11 @@ class LZSSEncoder(DataEncoder):
         return max_match_length, offset
 
     def encode_block(self, data_block: DataBlock):
-        table = self.encode_literal(''.join(data_block.data_list), self.type)
+        table = self.encode_literal(''.join(data_block.data_list))
         return table
+
+    def encoding(self, data_block: DataBlock):
+        return table_to_binary_baseline(self.encode_block(data_block))
 
 
 """
@@ -107,19 +111,19 @@ Format of binary:
             - 4-byte int (match length)
             - 4-byte int (match offset)
 """
-def table_to_binary(table):
+def table_to_binary_baseline(table):
     ret = uint_to_bitarray(len(table), SIZE_BYTE)
     for pattern, match_len, match_offset in table:
         # pattern
         ret += uint_to_bitarray(len(pattern), SIZE_BYTE)
-        ret += (functools.reduce(lambda b1, b2: b1 + b2, [uint_to_bitarray(ord(c), 8) for c in pattern]))
+        ret += (functools.reduce(lambda b1, b2: b1 + b2, [uint_to_bitarray(ord(c), 8) for c in pattern], BitArray('')))
         # match lenth
         ret += uint_to_bitarray(match_len, SIZE_BYTE)
         # match offset
         ret += uint_to_bitarray(match_offset, SIZE_BYTE)
     return ret
 
-def binary_to_table(input_bitarray):
+def binary_to_table_baseline(input_bitarray):
     ret, ptr, num_rows = [], SIZE_BYTE, bitarray_to_uint(input_bitarray[:SIZE_BYTE]),
     for _ in range(num_rows):
         # pattern
@@ -131,7 +135,7 @@ def binary_to_table(input_bitarray):
         match_len, ptr = bitarray_to_uint(input_bitarray[ptr:(ptr+SIZE_BYTE)]), ptr + SIZE_BYTE
         # match offset
         match_offset, ptr = bitarray_to_uint(input_bitarray[ptr:(ptr+SIZE_BYTE)]), ptr + SIZE_BYTE
-        ret.append((pattern, match_len, match_offset))
+        ret.append([pattern, match_len, match_offset])
     return ret
 
 class LZSSDecoder(DataDecoder):
@@ -150,16 +154,20 @@ class LZSSDecoder(DataDecoder):
             row += 1
         return ''.join(ret)
 
+    def decoding(self, binary):
+        table = binary_to_table_baseline(binary)
+        return self.decode_block(table)
 
 if __name__ == "__main__":
-    encoder_s = LZSSEncoder("shortest")
-    encoder_m = LZSSEncoder("merged")
+    encoder_s = LZSSEncoder("shortest", "baseline")
+    encoder_m = LZSSEncoder("merged", "baseline")
     decoder = LZSSDecoder()
     # # [['ab', 1, 1], ['', 6, 3], ['c', 2, 4]]
     s = "abbabbabbcab"
     e1 = encoder_s.encode_block(DataBlock(s))
     assert e1 == [['ab', 1, 1], ['', 6, 3], ['c', 2, 4]]
     assert s == decoder.decode_block(e1)
+    assert s == decoder.decoding(encoder_s.encoding(DataBlock(s)))
 
     # shortest: [['A', 1, 1], ['B', 6, 1], ['', 5, 9], ['CD', 4, 2]]
     # other: [['AAB', 6, 1], ['', 5, 9], ['CD', 4, 2]]
@@ -173,6 +181,8 @@ if __name__ == "__main__":
     assert e2 == [['AABBBBBBBAABBBCD', 4, 2]]
     assert s == decoder.decode_block(e1)
     assert s == decoder.decode_block(e2)
+    assert s == decoder.decoding(encoder_s.encoding(DataBlock(s)))
+    assert s == decoder.decoding(encoder_m.encoding(DataBlock(s)))
 
     # shortest: [['A', 1, 1], ['B', 17, 1], ['C', 1, 1], ['D', 1, 1]]
     # merged: [['AAB', 17, 1], ['CCD', 1, 1]]
@@ -184,6 +194,8 @@ if __name__ == "__main__":
     assert e2 == [['AAB', 17, 1], ['CCD', 1, 1]]
     assert s == decoder.decode_block(e1)
     assert s == decoder.decode_block(e2)
+    assert s == decoder.decoding(encoder_s.encoding(DataBlock(s)))
+    assert s == decoder.decoding(encoder_m.encoding(DataBlock(s)))
 
     # shortest: [['A', 1, 1], ['B', 17, 1], ['', 3, 20] ['C', 1, 1], ['D', 1, 1]]
     # merged: [['AAB', 17, 1], ['', 3, 20], ['CCD', 1, 1]]
@@ -195,3 +207,12 @@ if __name__ == "__main__":
     assert e2 == [['AAB', 17, 1], ['', 3, 20], ['CCD', 1, 1]]
     assert s == decoder.decode_block(e1)
     assert s == decoder.decode_block(e2)
+    assert s == decoder.decoding(encoder_s.encoding(DataBlock(s)))
+    assert s == decoder.decoding(encoder_m.encoding(DataBlock(s)))
+
+    t1 = [['ab', 1, 1], ['', 6, 3], ['c', 2, 4]]
+    t2 = []
+    t3 = [['abcd', 1, 1], ['', 1, 3], ['', 5, 11]]
+    assert t1 == binary_to_table_baseline(table_to_binary_baseline(t1))
+    assert t2 == binary_to_table_baseline(table_to_binary_baseline(t2))
+    assert t3 == binary_to_table_baseline(table_to_binary_baseline(t3))
