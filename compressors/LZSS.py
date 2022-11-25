@@ -6,6 +6,12 @@ import functools
 SIZE_BYTE = 32
 
 class LZSSEncoder(DataEncoder):
+    """
+    type: "shortest" -- Find shortest possible unmatched literals
+          "merged" -- Find longest possible unmatched literal more space efficient than several rows
+    binary_type: "baseline" -- Using baseline compression algorithm to convert the table to binary
+                 "optimized" -- Using optimized algorithm to convert table to binary
+    """
     def __init__(self, type, binary_type):
         self.type = type
         self.binary_type = binary_type
@@ -13,8 +19,7 @@ class LZSSEncoder(DataEncoder):
     Construct one possible encoding table
     Args:
         s: string to encode
-        type: "shortest" -- Find shortest possible unmatched literals
-              "merged" -- Find longest possible unmatched literal more space efficient than several rows
+
     Returns:
         table: list of lists representing rows
         Format of output table:
@@ -91,57 +96,41 @@ class LZSSEncoder(DataEncoder):
         # print(s[match_idx:(match_idx + max_match_length)])
         return max_match_length, offset
 
-    def encode_block(self, data_block: DataBlock):
+    def block_to_table(self, data_block: DataBlock) -> list:
         table = self.encode_literal(''.join(data_block.data_list))
         return table
 
-    def encoding(self, data_block: DataBlock):
-        return table_to_binary_baseline(self.encode_block(data_block))
+    """
+    Format of table:
+        pattern(assume ascii)    match length    match offset
+    Format of binary:
+        concatenation of:
+            - 4-byte int: number of rows
+            - rows being concatenation of:
+                - 4-byte int: number of ascii chars in pattern
+                - concatenation of 1-byte ascii encodings (pattern)
+                - 4-byte int (match length)
+                - 4-byte int (match offset)
+    """
+    def table_to_binary_baseline(self, table) -> BitArray:
+        ret = uint_to_bitarray(len(table), SIZE_BYTE)
+        for pattern, match_len, match_offset in table:
+            # pattern
+            ret += uint_to_bitarray(len(pattern), SIZE_BYTE)
+            ret += (functools.reduce(lambda b1, b2: b1 + b2, [uint_to_bitarray(ord(c), 8) for c in pattern], BitArray('')))
+            # match lenth
+            ret += uint_to_bitarray(match_len, SIZE_BYTE)
+            # match offset
+            ret += uint_to_bitarray(match_offset, SIZE_BYTE)
+        return ret
 
-
-"""
-Format of table:
-    pattern(assume ascii)    match length    match offset
-Format of binary:
-    concatenation of:
-        - 4-byte int: number of rows
-        - rows being concatenation of:
-            - 4-byte int: number of ascii chars in pattern
-            - concatenation of 1-byte ascii encodings (pattern)
-            - 4-byte int (match length)
-            - 4-byte int (match offset)
-"""
-def table_to_binary_baseline(table):
-    ret = uint_to_bitarray(len(table), SIZE_BYTE)
-    for pattern, match_len, match_offset in table:
-        # pattern
-        ret += uint_to_bitarray(len(pattern), SIZE_BYTE)
-        ret += (functools.reduce(lambda b1, b2: b1 + b2, [uint_to_bitarray(ord(c), 8) for c in pattern], BitArray('')))
-        # match lenth
-        ret += uint_to_bitarray(match_len, SIZE_BYTE)
-        # match offset
-        ret += uint_to_bitarray(match_offset, SIZE_BYTE)
-    return ret
-
-def binary_to_table_baseline(input_bitarray):
-    ret, ptr, num_rows = [], SIZE_BYTE, bitarray_to_uint(input_bitarray[:SIZE_BYTE]),
-    for _ in range(num_rows):
-        # pattern
-        num_chars, ptr, pattern =  bitarray_to_uint(input_bitarray[ptr:(ptr+SIZE_BYTE)]), ptr + SIZE_BYTE, ""
-        for _ in range(num_chars):
-            pattern += chr(bitarray_to_uint(input_bitarray[ptr:(ptr + 8)]))
-            ptr += 8
-        # match lenth
-        match_len, ptr = bitarray_to_uint(input_bitarray[ptr:(ptr+SIZE_BYTE)]), ptr + SIZE_BYTE
-        # match offset
-        match_offset, ptr = bitarray_to_uint(input_bitarray[ptr:(ptr+SIZE_BYTE)]), ptr + SIZE_BYTE
-        ret.append([pattern, match_len, match_offset])
-    return ret
+    def encoding(self, data_block: DataBlock) -> BitArray:
+        return self.table_to_binary_baseline(self.block_to_table(data_block))
 
 class LZSSDecoder(DataDecoder):
     def __init__(self): pass
 
-    def decode_block(self, table):
+    def table_to_block(self, table):
         ret, ptr, row = ['' for _ in range(sum([len(r[0]) + r[1] for r in table]))], 0, 0
         while ptr < len(ret):
             pattern, match_len, match_offset = table[row]
@@ -154,9 +143,23 @@ class LZSSDecoder(DataDecoder):
             row += 1
         return ''.join(ret)
 
+    def binary_to_table_baseline(self, input_bitarray):
+        ret, ptr, num_rows = [], SIZE_BYTE, bitarray_to_uint(input_bitarray[:SIZE_BYTE]),
+        for _ in range(num_rows):
+            # pattern
+            num_chars, ptr, pattern =  bitarray_to_uint(input_bitarray[ptr:(ptr+SIZE_BYTE)]), ptr + SIZE_BYTE, ""
+            for _ in range(num_chars):
+                pattern += chr(bitarray_to_uint(input_bitarray[ptr:(ptr + 8)]))
+                ptr += 8
+            # match lenth
+            match_len, ptr = bitarray_to_uint(input_bitarray[ptr:(ptr+SIZE_BYTE)]), ptr + SIZE_BYTE
+            # match offset
+            match_offset, ptr = bitarray_to_uint(input_bitarray[ptr:(ptr+SIZE_BYTE)]), ptr + SIZE_BYTE
+            ret.append([pattern, match_len, match_offset])
+        return ret
+
     def decoding(self, binary):
-        table = binary_to_table_baseline(binary)
-        return self.decode_block(table)
+        return self.table_to_block(self.binary_to_table_baseline(binary))
 
 if __name__ == "__main__":
     encoder_s = LZSSEncoder("shortest", "baseline")
@@ -164,9 +167,9 @@ if __name__ == "__main__":
     decoder = LZSSDecoder()
     # # [['ab', 1, 1], ['', 6, 3], ['c', 2, 4]]
     s = "abbabbabbcab"
-    e1 = encoder_s.encode_block(DataBlock(s))
+    e1 = encoder_s.block_to_table(DataBlock(s))
     assert e1 == [['ab', 1, 1], ['', 6, 3], ['c', 2, 4]]
-    assert s == decoder.decode_block(e1)
+    assert s == decoder.table_to_block(e1)
     assert s == decoder.decoding(encoder_s.encoding(DataBlock(s)))
 
     # shortest: [['A', 1, 1], ['B', 6, 1], ['', 5, 9], ['CD', 4, 2]]
@@ -176,11 +179,11 @@ if __name__ == "__main__":
     # print(encode("A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3, "shortest"))
     # print(encode("A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3, "merged"))
     s = "A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3
-    e1, e2 = encoder_s.encode_block(DataBlock(s)), encoder_m.encode_block(DataBlock(s))
+    e1, e2 = encoder_s.block_to_table(DataBlock(s)), encoder_m.block_to_table(DataBlock(s))
     assert e1 == [['A', 1, 1], ['B', 6, 1], ['', 5, 9], ['CD', 4, 2]]
     assert e2 == [['AABBBBBBBAABBBCD', 4, 2]]
-    assert s == decoder.decode_block(e1)
-    assert s == decoder.decode_block(e2)
+    assert s == decoder.table_to_block(e1)
+    assert s == decoder.table_to_block(e2)
     assert s == decoder.decoding(encoder_s.encoding(DataBlock(s)))
     assert s == decoder.decoding(encoder_m.encoding(DataBlock(s)))
 
@@ -189,11 +192,11 @@ if __name__ == "__main__":
     # print(encode("A"*2 + "B"*18 + "C"*2 + "D"*2, "shortest"))
     # print(encode("A"*2 + "B"*18 + "C"*2 + "D"*2, "merged"))
     s = "A"*2 + "B"*18 + "C"*2 + "D"*2
-    e1, e2 = encoder_s.encode_block(DataBlock(s)), encoder_m.encode_block(DataBlock(s))
+    e1, e2 = encoder_s.block_to_table(DataBlock(s)), encoder_m.block_to_table(DataBlock(s))
     assert e1 == [['A', 1, 1], ['B', 17, 1], ['C', 1, 1], ['D', 1, 1]]
     assert e2 == [['AAB', 17, 1], ['CCD', 1, 1]]
-    assert s == decoder.decode_block(e1)
-    assert s == decoder.decode_block(e2)
+    assert s == decoder.table_to_block(e1)
+    assert s == decoder.table_to_block(e2)
     assert s == decoder.decoding(encoder_s.encoding(DataBlock(s)))
     assert s == decoder.decoding(encoder_m.encoding(DataBlock(s)))
 
@@ -202,17 +205,17 @@ if __name__ == "__main__":
     # print(encode("A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2, "shortest"))
     # print(encode("A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2, "merged"))
     s = "A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2
-    e1, e2 = encoder_s.encode_block(DataBlock(s)), encoder_m.encode_block(DataBlock(s))
+    e1, e2 = encoder_s.block_to_table(DataBlock(s)), encoder_m.block_to_table(DataBlock(s))
     assert e1 == [['A', 1, 1], ['B', 17, 1], ['', 3, 20], ['C', 1, 1], ['D', 1, 1]]
     assert e2 == [['AAB', 17, 1], ['', 3, 20], ['CCD', 1, 1]]
-    assert s == decoder.decode_block(e1)
-    assert s == decoder.decode_block(e2)
+    assert s == decoder.table_to_block(e1)
+    assert s == decoder.table_to_block(e2)
     assert s == decoder.decoding(encoder_s.encoding(DataBlock(s)))
     assert s == decoder.decoding(encoder_m.encoding(DataBlock(s)))
 
     t1 = [['ab', 1, 1], ['', 6, 3], ['c', 2, 4]]
     t2 = []
     t3 = [['abcd', 1, 1], ['', 1, 3], ['', 5, 11]]
-    assert t1 == binary_to_table_baseline(table_to_binary_baseline(t1))
-    assert t2 == binary_to_table_baseline(table_to_binary_baseline(t2))
-    assert t3 == binary_to_table_baseline(table_to_binary_baseline(t3))
+    assert t1 == decoder.binary_to_table_baseline(encoder_s.table_to_binary_baseline(t1))
+    assert t2 == decoder.binary_to_table_baseline(encoder_s.table_to_binary_baseline(t2))
+    assert t3 == decoder.binary_to_table_baseline(encoder_s.table_to_binary_baseline(t3))
