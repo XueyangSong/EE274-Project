@@ -1,5 +1,8 @@
 from core.data_block import DataBlock
 from core.data_encoder_decoder import DataDecoder, DataEncoder
+from compressors.elias_delta_uint_coder import EliasDeltaUintDecoder, EliasDeltaUintEncoder
+from compressors.huffman_coder import HuffmanDecoder, HuffmanEncoder
+from core.prob_dist import ProbabilityDist
 from utils.bitarray_utils import BitArray, bitarray_to_uint, uint_to_bitarray
 import functools
 
@@ -124,11 +127,57 @@ class LZSSEncoder(DataEncoder):
             ret += uint_to_bitarray(match_offset, SIZE_BYTE)
         return ret
 
+    '''
+    Format of table:
+        pattern(assume ascii)    match length    match offset
+    Format of binary:
+        concatenation of:
+            - number of bits used for huffman encoding
+            - Huffman encoding of all patterns
+            - min match length
+            - rows being concatenation of:
+                - pattern == '': 0
+                  pattern != '': 1 + number of chars in pattern + Huffman encoding of pattern
+                - Elias Delta encoded int (match length - min match length)
+                - Elias Delta encoded int (match offset)
+    '''
+    def table_to_binary_optimized(self, table) -> BitArray:
+        if len(table) == 0: return BitArray('')
+        text = ''.join([x for x, _, _ in table])
+        text = [ord(c) for c in text]
+        counts = DataBlock(text).get_counts()
+        prob_dict = ProbabilityDist.normalize_prob_dict(counts).prob_dict
+        prob_dist_sorted = ProbabilityDist({i: prob_dict[i] for i in sorted(prob_dict)})
+        literal_encoding = HuffmanEncoder(prob_dist_sorted).encode_block(DataBlock(text))
+        for i in range(256):
+            if i not in counts:
+                counts[i] = 0
+        counts_list = [counts[i] for i in range(256)]
+        counts_encoding = EliasDeltaUintEncoder().encode_block(DataBlock(counts_list))
+        ed_int_encoder = EliasDeltaUintEncoder()
+        ret = ed_int_encoder.encode_symbol(len(literal_encoding)) + literal_encoding + ed_int_encoder.encode_symbol(len(counts_encoding)) + counts_encoding
+        min_match_len = min([x for _, x, _ in table])
+        ret += ed_int_encoder.encode_symbol(min_match_len)
+        for pattern, match_len, match_offset in table:
+            # pattern
+            if pattern == '': ret += BitArray('0')
+            else:
+                ret += BitArray('1')
+                ret += ed_int_encoder.encode_symbol(len(pattern))
+            # match lenth
+            ret += ed_int_encoder.encode_symbol(match_len - min_match_len)
+            # match offset
+            ret += ed_int_encoder.encode_symbol(match_offset)
+        return ret
+
     def encoding(self, data_block: DataBlock) -> BitArray:
-        return self.table_to_binary_baseline(self.block_to_table(data_block))
+        if self.binary_type == "baseline":
+            return self.table_to_binary_baseline(self.block_to_table(data_block))
+        return self.table_to_binary_optimized(self.block_to_table(data_block))
 
 class LZSSDecoder(DataDecoder):
-    def __init__(self): pass
+    def __init__(self, binary_type):
+        self.binary_type = binary_type
 
     def table_to_block(self, table):
         ret, ptr, row = ['' for _ in range(sum([len(r[0]) + r[1] for r in table]))], 0, 0
@@ -158,19 +207,70 @@ class LZSSDecoder(DataDecoder):
             ret.append([pattern, match_len, match_offset])
         return ret
 
+    def binary_to_table_optimized(self, input_bitarray):
+        if len(input_bitarray) == 0: return []
+        ed_int_decoder = EliasDeltaUintDecoder()
+        # number of bits for Huffman
+        huffman_len, num_bits_consumed = ed_int_decoder.decode_symbol(input_bitarray)
+        huffman_text = input_bitarray[num_bits_consumed : (huffman_len + num_bits_consumed)]
+        rest_table = input_bitarray[(huffman_len + num_bits_consumed) : ]
+        count_len, num_bits_consumed = ed_int_decoder.decode_symbol(rest_table)
+        count = rest_table[num_bits_consumed : (count_len + num_bits_consumed)]
+        rest_table = rest_table[(count_len + num_bits_consumed) : ]
+        # min match length
+        min_match_len, num_bits_consumed = ed_int_decoder.decode_symbol(rest_table)
+        ret = []
+        while num_bits_consumed < len(rest_table):
+            # pattern
+            num_bits_consumed += 1
+            if rest_table[num_bits_consumed - 1] == 0:
+                pattern_len = 0
+            else:
+                pattern_len, n = ed_int_decoder.decode_symbol(rest_table[num_bits_consumed : ])
+                num_bits_consumed += n
+            # match length
+            match_len, n = ed_int_decoder.decode_symbol(rest_table[num_bits_consumed : ])
+            num_bits_consumed += n
+            match_len += min_match_len
+            # match offset
+            match_offset, n = ed_int_decoder.decode_symbol(rest_table[num_bits_consumed : ])
+            num_bits_consumed += n
+            ret.append([pattern_len, match_len, match_offset])
+        literal_counts, _ = ed_int_decoder.decode_block(count)
+        literal_counts = literal_counts.data_list
+        literal_counts = {i: literal_counts[i] for i in range(256) if literal_counts[i] > 0}
+        prob_dist = ProbabilityDist.normalize_prob_dict(literal_counts)
+        decoded_literals, _ = HuffmanDecoder(prob_dist).decode_block(huffman_text)
+        decoded_literals = [chr(c) for c in decoded_literals.data_list]
+        cnt = 0
+        for i in range(len(ret)):
+            l = ret[i][0]
+            ret[i][0] = ''.join(decoded_literals[cnt : (cnt + l)])
+            cnt += l
+        return ret
+
     def decoding(self, binary):
-        return self.table_to_block(self.binary_to_table_baseline(binary))
+        if self.binary_type == "baseline":
+            return self.table_to_block(self.binary_to_table_baseline(binary))
+        return self.table_to_block(self.binary_to_table_optimized(binary))
+
+
 
 if __name__ == "__main__":
-    encoder_s = LZSSEncoder("shortest", "baseline")
-    encoder_m = LZSSEncoder("merged", "baseline")
-    decoder = LZSSDecoder()
+    encoder_s_b = LZSSEncoder("shortest", "baseline")
+    encoder_m_b = LZSSEncoder("merged", "baseline")
+    decoder_b = LZSSDecoder("baseline")
+    encoder_s_o = LZSSEncoder("shortest", "optimized")
+    encoder_m_o = LZSSEncoder("merged", "optimized")
+    decoder_o = LZSSDecoder("optimized")
     # # [['ab', 1, 1], ['', 6, 3], ['c', 2, 4]]
     s = "abbabbabbcab"
-    e1 = encoder_s.block_to_table(DataBlock(s))
+    e1 = encoder_s_b.block_to_table(DataBlock(s))
     assert e1 == [['ab', 1, 1], ['', 6, 3], ['c', 2, 4]]
-    assert s == decoder.table_to_block(e1)
-    assert s == decoder.decoding(encoder_s.encoding(DataBlock(s)))
+    assert s == decoder_b.table_to_block(e1)
+    assert s == decoder_b.decoding(encoder_s_b.encoding(DataBlock(s)))
+    assert s == decoder_o.decoding(encoder_s_o.encoding(DataBlock(s)))
+    print(len(encoder_s_b.encoding(DataBlock(s))), len(encoder_s_o.encoding(DataBlock(s))))
 
     # shortest: [['A', 1, 1], ['B', 6, 1], ['', 5, 9], ['CD', 4, 2]]
     # other: [['AAB', 6, 1], ['', 5, 9], ['CD', 4, 2]]
@@ -179,43 +279,64 @@ if __name__ == "__main__":
     # print(encode("A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3, "shortest"))
     # print(encode("A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3, "merged"))
     s = "A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3
-    e1, e2 = encoder_s.block_to_table(DataBlock(s)), encoder_m.block_to_table(DataBlock(s))
+    e1, e2 = encoder_s_b.block_to_table(DataBlock(s)), encoder_m_b.block_to_table(DataBlock(s))
     assert e1 == [['A', 1, 1], ['B', 6, 1], ['', 5, 9], ['CD', 4, 2]]
     assert e2 == [['AABBBBBBBAABBBCD', 4, 2]]
-    assert s == decoder.table_to_block(e1)
-    assert s == decoder.table_to_block(e2)
-    assert s == decoder.decoding(encoder_s.encoding(DataBlock(s)))
-    assert s == decoder.decoding(encoder_m.encoding(DataBlock(s)))
+    assert s == decoder_b.table_to_block(e1)
+    assert s == decoder_b.table_to_block(e2)
+    assert s == decoder_b.decoding(encoder_s_b.encoding(DataBlock(s)))
+    assert s == decoder_b.decoding(encoder_m_b.encoding(DataBlock(s)))
+    assert s == decoder_o.decoding(encoder_s_o.encoding(DataBlock(s)))
+    assert s == decoder_o.decoding(encoder_m_o.encoding(DataBlock(s)))
+    print(len(encoder_s_b.encoding(DataBlock(s))), len(encoder_s_o.encoding(DataBlock(s))))
+    print(len(encoder_m_b.encoding(DataBlock(s))), len(encoder_m_o.encoding(DataBlock(s))))
 
     # shortest: [['A', 1, 1], ['B', 17, 1], ['C', 1, 1], ['D', 1, 1]]
     # merged: [['AAB', 17, 1], ['CCD', 1, 1]]
     # print(encode("A"*2 + "B"*18 + "C"*2 + "D"*2, "shortest"))
     # print(encode("A"*2 + "B"*18 + "C"*2 + "D"*2, "merged"))
     s = "A"*2 + "B"*18 + "C"*2 + "D"*2
-    e1, e2 = encoder_s.block_to_table(DataBlock(s)), encoder_m.block_to_table(DataBlock(s))
+    e1, e2 = encoder_s_b.block_to_table(DataBlock(s)), encoder_m_b.block_to_table(DataBlock(s))
     assert e1 == [['A', 1, 1], ['B', 17, 1], ['C', 1, 1], ['D', 1, 1]]
     assert e2 == [['AAB', 17, 1], ['CCD', 1, 1]]
-    assert s == decoder.table_to_block(e1)
-    assert s == decoder.table_to_block(e2)
-    assert s == decoder.decoding(encoder_s.encoding(DataBlock(s)))
-    assert s == decoder.decoding(encoder_m.encoding(DataBlock(s)))
+    assert s == decoder_b.table_to_block(e1)
+    assert s == decoder_b.table_to_block(e2)
+    assert s == decoder_b.decoding(encoder_s_b.encoding(DataBlock(s)))
+    assert s == decoder_b.decoding(encoder_m_b.encoding(DataBlock(s)))
+    assert s == decoder_o.decoding(encoder_s_o.encoding(DataBlock(s)))
+    assert s == decoder_o.decoding(encoder_m_o.encoding(DataBlock(s)))
+    assert s == decoder_o.decoding(encoder_s_o.encoding(DataBlock(s)))
+    assert s == decoder_o.decoding(encoder_m_o.encoding(DataBlock(s)))
+    print(len(encoder_s_b.encoding(DataBlock(s))), len(encoder_s_o.encoding(DataBlock(s))))
+    print(len(encoder_m_b.encoding(DataBlock(s))), len(encoder_m_o.encoding(DataBlock(s))))
 
     # shortest: [['A', 1, 1], ['B', 17, 1], ['', 3, 20] ['C', 1, 1], ['D', 1, 1]]
     # merged: [['AAB', 17, 1], ['', 3, 20], ['CCD', 1, 1]]
     # print(encode("A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2, "shortest"))
     # print(encode("A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2, "merged"))
     s = "A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2
-    e1, e2 = encoder_s.block_to_table(DataBlock(s)), encoder_m.block_to_table(DataBlock(s))
+    e1, e2 = encoder_s_b.block_to_table(DataBlock(s)), encoder_m_b.block_to_table(DataBlock(s))
     assert e1 == [['A', 1, 1], ['B', 17, 1], ['', 3, 20], ['C', 1, 1], ['D', 1, 1]]
     assert e2 == [['AAB', 17, 1], ['', 3, 20], ['CCD', 1, 1]]
-    assert s == decoder.table_to_block(e1)
-    assert s == decoder.table_to_block(e2)
-    assert s == decoder.decoding(encoder_s.encoding(DataBlock(s)))
-    assert s == decoder.decoding(encoder_m.encoding(DataBlock(s)))
+    assert s == decoder_b.table_to_block(e1)
+    assert s == decoder_b.table_to_block(e2)
+    assert s == decoder_b.decoding(encoder_s_b.encoding(DataBlock(s)))
+    assert s == decoder_b.decoding(encoder_m_b.encoding(DataBlock(s)))
+    assert s == decoder_o.decoding(encoder_s_o.encoding(DataBlock(s)))
+    assert s == decoder_o.decoding(encoder_m_o.encoding(DataBlock(s)))
+    print(len(encoder_s_b.encoding(DataBlock(s))), len(encoder_s_o.encoding(DataBlock(s))))
+    print(len(encoder_m_b.encoding(DataBlock(s))), len(encoder_m_o.encoding(DataBlock(s))))
 
     t1 = [['ab', 1, 1], ['', 6, 3], ['c', 2, 4]]
     t2 = []
     t3 = [['abcd', 1, 1], ['', 1, 3], ['', 5, 11]]
-    assert t1 == decoder.binary_to_table_baseline(encoder_s.table_to_binary_baseline(t1))
-    assert t2 == decoder.binary_to_table_baseline(encoder_s.table_to_binary_baseline(t2))
-    assert t3 == decoder.binary_to_table_baseline(encoder_s.table_to_binary_baseline(t3))
+    assert t1 == decoder_b.binary_to_table_baseline(encoder_s_b.table_to_binary_baseline(t1))
+    assert t2 == decoder_b.binary_to_table_baseline(encoder_s_b.table_to_binary_baseline(t2))
+    assert t3 == decoder_b.binary_to_table_baseline(encoder_s_b.table_to_binary_baseline(t3))
+    assert t1 == decoder_o.binary_to_table_optimized(encoder_s_o.table_to_binary_optimized(t1))
+    assert t2 == decoder_o.binary_to_table_optimized(encoder_s_o.table_to_binary_optimized(t2))
+    assert t3 == decoder_o.binary_to_table_optimized(encoder_s_o.table_to_binary_optimized(t3))
+
+    t1 = [['abcdef', 1, 1], ['', 1, 3], ['', 1, 3], ['', 1, 3], ['', 5, 11], ['', 5, 11], ['efefsfsdf', 5, 11]]
+    assert t1 == decoder_b.binary_to_table_optimized(encoder_s_b.table_to_binary_optimized(t1))
+    print(len(encoder_s_b.table_to_binary_baseline(t1)), len(encoder_s_o.table_to_binary_optimized(t1)))
