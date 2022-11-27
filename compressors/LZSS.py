@@ -10,14 +10,20 @@ SIZE_BYTE = 32
 
 class LZSSEncoder(DataEncoder):
     """
-    type: "shortest" -- Find shortest possible unmatched literals
+    window_size: int -- how far we allow the compressor to look backwards to find matches
+                 -1 -- always look backwards from the start
+    table_type: "shortest" -- Find shortest possible unmatched literals
           "merged" -- Find longest possible unmatched literal more space efficient than several rows
+    find_match_method: "basic" -- greedy search for the longest match from the start of the lookahead buffer
     binary_type: "baseline" -- Using baseline compression algorithm to convert the table to binary
                  "optimized" -- Using optimized algorithm to convert table to binary
     """
-    def __init__(self, type, binary_type):
-        self.type = type
+    def __init__(self, window_size, table_type, find_match_method, binary_type):
+        self.window_size = window_size
+        self.table_type = table_type
         self.binary_type = binary_type
+        self.find_match_method = find_match_method
+
     """
     Construct one possible encoding table
     Args:
@@ -33,7 +39,11 @@ class LZSSEncoder(DataEncoder):
         search_idx, match_idx = 0, 1
         unmatched = s[0]
         while match_idx < len(s):
-            match_length, match_offset = self.find_match(s, search_idx, match_idx)
+            if self.window_size == -1:
+                search_idx = 0
+            else:
+                search_idx = match_idx - self.window_size if match_idx - self.window_size >= 0 else 0
+            match_length, match_offset = self.find_match_basic(s, search_idx, match_idx)
             if match_length == 0:
                 unmatched += s[match_idx]
                 match_idx += 1
@@ -41,7 +51,7 @@ class LZSSEncoder(DataEncoder):
                 table.append([unmatched, match_length, match_offset])
                 unmatched = ""
                 match_idx += match_length
-        if self.type == "merged":
+        if self.table_type == "merged":
             merged_table = []
             merged_table.append(table[0])
             for i in range(1, len(table)):
@@ -82,7 +92,7 @@ class LZSSEncoder(DataEncoder):
         match length: int
         match offset: int
     """
-    def find_match(self, s, search_idx, match_idx) -> (int, int):
+    def find_match_basic(self, s, search_idx, match_idx) -> (int, int):
         assert match_idx > search_idx, f"Match index at {match_idx} starts before search index at {search_idx}"
         max_match_length, offset = 0, -1
         search_start, search_end, look_ahead_start, look_ahead_end = search_idx, search_idx, match_idx, match_idx
@@ -98,6 +108,8 @@ class LZSSEncoder(DataEncoder):
             look_ahead_end = look_ahead_start
         # print(s[match_idx:(match_idx + max_match_length)])
         return max_match_length, offset
+
+    # def find_match_hashchain(self, s, search_idx, match_idx) -> (int, int):
 
     def block_to_table(self, data_block: DataBlock) -> list:
         table = self.encode_literal(''.join(data_block.data_list))
@@ -257,11 +269,11 @@ class LZSSDecoder(DataDecoder):
 
 
 if __name__ == "__main__":
-    encoder_s_b = LZSSEncoder("shortest", "baseline")
-    encoder_m_b = LZSSEncoder("merged", "baseline")
+    encoder_s_b = LZSSEncoder(-1, "shortest", "basic", "baseline")
+    encoder_m_b = LZSSEncoder(-1, "merged", "basic", "baseline")
     decoder_b = LZSSDecoder("baseline")
-    encoder_s_o = LZSSEncoder("shortest", "optimized")
-    encoder_m_o = LZSSEncoder("merged", "optimized")
+    encoder_s_o = LZSSEncoder(-1, "shortest", "basic", "optimized")
+    encoder_m_o = LZSSEncoder(-1, "merged", "basic", "optimized")
     decoder_o = LZSSDecoder("optimized")
     # # [['ab', 1, 1], ['', 6, 3], ['c', 2, 4]]
     s = "abbabbabbcab"
