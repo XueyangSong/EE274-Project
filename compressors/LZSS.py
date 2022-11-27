@@ -8,7 +8,7 @@ import functools
 
 SIZE_BYTE = 32
 MAX_WINDOW_SIZE = 1024
-HASH_NUM_BYTES = 1
+HASH_NUM_BYTES = 4
 NUM_HASH_TO_SEARCH = 16
 
 class LZSSEncoder(DataEncoder):
@@ -54,6 +54,7 @@ class LZSSEncoder(DataEncoder):
                 match_length, match_offset = self.find_match_basic(s, search_idx, match_idx)
             elif self.find_match_method == "hashchain":
                 match_length, match_offset = self.find_match_hashchain(s, search_idx, match_idx)
+                # print("match_length: {}, match_offset: {}".format(match_length, match_offset))
             if match_length == 0:
                 unmatched += s[match_idx]
                 match_idx += 1
@@ -61,6 +62,8 @@ class LZSSEncoder(DataEncoder):
                 table.append([unmatched, match_length, match_offset])
                 unmatched = ""
                 match_idx += match_length
+        if unmatched != "":
+            table.append([unmatched, match_length, 0])
         if self.table_type == "merged":
             merged_table = []
             merged_table.append(table[0])
