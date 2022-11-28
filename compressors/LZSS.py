@@ -5,11 +5,25 @@ from compressors.huffman_coder import HuffmanDecoder, HuffmanEncoder
 from core.prob_dist import ProbabilityDist
 from utils.bitarray_utils import BitArray, bitarray_to_uint, uint_to_bitarray
 import functools
+import math
 
 SIZE_BYTE = 32
 MAX_WINDOW_SIZE = 1024
-HASH_NUM_BYTES = 4
+HASH_NUM_BYTES = 3
 NUM_HASH_TO_SEARCH = 16
+MAX_MATCH_SIZE = 1024
+
+"""
+TODO:
+1. Evaluate correctness/optimality of optimal parsing.
+2. Implement block_encoding/decoding. Currently takes in entire input.
+3. Implement search from fixed-size window instead of search from entire history.
+4. Add min_match_length.
+5. Remove "merged" table type, as the idea is already in `min_match_length` and `optimal_parsing`.
+6. Generalize to bytearray inputs instead of strings.
+7. Dump output to dataframe instead of print to terminal. Easier for graphing.
+8. Test on larger files.
+"""
 
 class LZSSEncoder(DataEncoder):
     """
@@ -17,53 +31,71 @@ class LZSSEncoder(DataEncoder):
                  Defaults to be MAX_WINDOW_SIZE
     table_type: "shortest" -- Find shortest possible unmatched literals
                 "merged" -- Find longest possible unmatched literal more space efficient than several rows
-    find_match_method: "basic" -- greedy search for the longest match from the start of the lookahead buffer
+    find_match_method: "basic" -- sequential search for the longest match from the start of the lookahead buffer
                        "hashchain" -- use chained hashes of fixed number bytes to find the longest match
                                      from the start of the lookahead buffer
+    greedy_optimal: "greedy" -- greedily search for the longest possible match
+                    "optimal" -- implements optimal parsing that may not return the longest possible match for all positions
     binary_type: "baseline" -- Using baseline compression algorithm to convert the table to binary
                  "optimized" -- Using optimized algorithm to convert table to binary
     """
-    def __init__(self, table_type, find_match_method, binary_type, window_size=MAX_WINDOW_SIZE):
+    def __init__(self, table_type, find_match_method, binary_type, greedy_optimal, window_size=MAX_WINDOW_SIZE):
         assert window_size > 0, f"window size is {window_size}, should be larger than 0."
         self.window_size = window_size
         self.window_mask = self.window_size - 1
         self.table_type = table_type
         self.binary_type = binary_type
         self.find_match_method = find_match_method
+        self.greedy_optimal = greedy_optimal
         if self.find_match_method == "hashchain":
             self.hash_table = dict() # key -> closest index of same key
             self.chained_prev = [0] * self.window_size # storing the last index of same key
 
     """
-    Construct one possible encoding table
+    Parse a datablock by the selected method into a table
     Args:
-        s: string to encode
-
+        data_block: DataBlock
     Returns:
         table: list of lists representing rows
         Format of output table:
         Unmatched literals | Match length | Match offset
     """
-    def encode_literal(self, s) -> list:
+    def block_to_table(self, data_block: DataBlock) -> list:
+        if self.greedy_optimal == "greedy":
+            table = self.greedy_parsing(''.join(data_block.data_list))
+        elif self.greedy_optimal == "optimal":
+            table = self.optimal_parsing(''.join(data_block.data_list))
+        return table
+
+    """
+    Greedily construct the encoding table
+    Args:
+        s: string to encode
+    Returns:
+        table: list of lists representing rows
+        Format of output table:
+        Unmatched literals | Match length | Match offset
+    """
+    def greedy_parsing(self, s) -> list:
         table = []
         search_idx, match_idx = 0, 0
         unmatched = ""
         while match_idx < len(s):
             search_idx = match_idx - self.window_size if match_idx - self.window_size >= 0 else 0
             if self.find_match_method == "basic":
-                match_length, match_offset = self.find_match_basic(s, search_idx, match_idx)
+                match_count, match_lengths, match_offsets = self.find_match_basic(s, search_idx, match_idx, "greedy")
+                # print(match_lengths)
             elif self.find_match_method == "hashchain":
-                match_length, match_offset = self.find_match_hashchain(s, search_idx, match_idx)
-                # print("match_length: {}, match_offset: {}".format(match_length, match_offset))
-            if match_length == 0:
+                match_count, match_lengths, match_offsets = self.find_match_hashchain(s, search_idx, match_idx, "greedy")
+            if match_count == 0:
                 unmatched += s[match_idx]
                 match_idx += 1
             else:
-                table.append([unmatched, match_length, match_offset])
+                table.append([unmatched, match_lengths[0], match_offsets[0]])
                 unmatched = ""
-                match_idx += match_length
+                match_idx += match_lengths[0]
         if unmatched != "":
-            table.append([unmatched, match_length, 0])
+            table.append([unmatched, 0, 0])
         if self.table_type == "merged":
             merged_table = []
             merged_table.append(table[0])
@@ -85,6 +117,91 @@ class LZSSEncoder(DataEncoder):
         return table
 
     """
+    Implements optimal parsing that may not return the longest possible match for all positions
+    Args:
+        s: string to encode
+    Returns:
+        table: list of lists representing rows
+        Format of output table:
+        Unmatched literals | Match length | Match offset
+    """
+    def optimal_parsing(self, s) -> list:
+        # match_size = min(MAX_MATCH_SIZE, len(s) - match_idx)
+        match_size = len(s)
+        prices = [99999999] * (match_size + 1)
+        lengths = [0] * (match_size + 1)
+        dists = [0] * (match_size + 1)
+        prices[0] = 0
+        search_idx, match_idx = 0, 0
+
+        # forward pass
+        for i in range(match_size):
+            lit_cost = prices[i] + self.literal_price(s[match_idx + i])
+            if lit_cost < prices[i + 1]:
+                prices[i + 1] = lit_cost
+                lengths[i + 1] = 1
+                dists[i + 1] = 0
+            # Don't try matches close to end of buffer
+            # if i + 4 >= length:
+            #     continue
+            if self.find_match_method == "basic":
+                num_matches, match_len, match_dist = self.find_match_basic(s, search_idx, match_idx + i, "optimal")
+            elif self.find_match_method == "hashchain":
+                num_matches, match_len, match_dist = self.find_match_hashchain(s, search_idx, match_idx + i, "optimal")
+            for j in range(num_matches):
+                match_cost = prices[i] + self.match_price(match_len[j], match_dist[j])
+                if match_cost < prices[i + match_len[j]]:
+                    prices[i + match_len[j]] = match_cost
+                    lengths[i + match_len[j]] = match_len[j]
+                    dists[i + match_len[j]] = match_dist[j]
+
+        # backward pass
+        # Process from the end of current block
+        table = []
+        unmatched_literal = ""
+        cur = match_size
+        while cur > 0 and lengths[cur] == 1:
+            unmatched_literal = s[match_idx + cur - 1] + unmatched_literal
+            cur -= 1
+        table.insert(0, [unmatched_literal, 0, 0])
+        while cur > 0:
+            if lengths[cur] > 1:
+                if len(table) != 0:
+                    table[0][0] = unmatched_literal
+                    unmatched_literal = ""
+                table.insert(0, [unmatched_literal, lengths[cur], dists[cur]])
+                cur -= lengths[cur]
+            else:
+                unmatched_literal = s[match_idx + cur - 1] + unmatched_literal
+                cur -= 1
+        if unmatched_literal != "":
+            table[0][0] = unmatched_literal
+        return table
+
+    """
+    Empirical cost heuristics for each literal
+    Args:
+        c: the current literal to be matched
+    Returns:
+        Empirical cost for each literal (Credit: https://glinscott.github.io/lz/index.html#toc4.2.2)
+    """
+    def literal_price(self, c):
+        return 6
+
+    """
+    Empirical cost heuristics for a match
+    Args:
+        length: match length
+        dist: match offset
+    Returns:
+        Empirical cost for each match (Credit: https://glinscott.github.io/lz/index.html#toc4.2.2)
+    """
+    def match_price(self, length, dist):
+        len_cost = 6 + math.log2(length)
+        dist_cost = max(0, math.log2(dist) - 3)
+        return len_cost + dist_cost
+
+    """
     Get size of a row in bytes
     Assume row size (bytes) = 4 + len(pattern) + 4 + 4
     Args:
@@ -101,26 +218,36 @@ class LZSSEncoder(DataEncoder):
         s: string to process
         search_idx: starting search index in the string to process
         match_idx: starting match index in the string to process
+        greedy_optimal: string to indicate whether we greedily return longest match or return all matches
     Returns:
-        match length: int
-        match offset: int
+        match count: int. Number of matches found. Always equals 1 if `greedy_optimal` is "greedy".
+        match length: [int]. Lengths of matches found. Always size 1 if `greedy_optimal` is "greedy".
+        match offset: [int]. Offsets of matches found. Always size 1 if `greedy_optimal` is "greedy".
     """
-    def find_match_basic(self, s, search_idx, match_idx) -> (int, int):
+    def find_match_basic(self, s, search_idx, match_idx, greedy_optimal) -> (int, [int], [int]):
         assert match_idx >= search_idx, f"Match index at {match_idx} starts before search index at {search_idx}"
-        max_match_length, offset = 0, -1
+        match_count = 0
+        max_match_length = 0
+        lengths, offsets = [], []
         search_start, search_end, look_ahead_start, look_ahead_end = search_idx, search_idx, match_idx, match_idx
         while search_start < look_ahead_start and search_end < len(s) and look_ahead_end < len(s):
             while look_ahead_end < len(s) and search_end < len(s) and (s[look_ahead_end] == s[search_end]):
                 look_ahead_end += 1
                 search_end += 1
-                if look_ahead_end - look_ahead_start >= max_match_length:
-                    max_match_length = look_ahead_end - look_ahead_start
-                    offset = look_ahead_start - search_start
+                if greedy_optimal == "greedy":
+                    if look_ahead_end - look_ahead_start >= max_match_length:
+                        lengths, offsets = [look_ahead_end - look_ahead_start], [look_ahead_start - search_start]
+                        max_match_length = lengths[0]
+                        match_count = 1
+                elif greedy_optimal == "optimal":
+                    if look_ahead_end - look_ahead_start > 0:
+                        lengths.append(look_ahead_end - look_ahead_start)
+                        offsets.append(look_ahead_start - search_start)
+                        match_count += 1
             search_start += 1
             search_end = search_start
             look_ahead_end = look_ahead_start
-        # print(s[match_idx:(match_idx + max_match_length)])
-        return max_match_length, offset
+        return match_count, lengths, offsets
 
     """
     Use a hashtable keyed by HASH_NUM_BYTES-long prefix hash and storing lists of indices
@@ -129,13 +256,17 @@ class LZSSEncoder(DataEncoder):
         s: string to process
         search_idx: starting search index in the string to process
         match_idx: starting match index in the string to process
+        greedy_optimal: string to indicate whether we greedily return longest match or return all matches
     Returns:
-        match length: int
-        match offset: int
+        match count: int. Number of matches found. Always equals 1 if `greedy_optimal` is "greedy".
+        match length: [int]. Lengths of matches found. Always size 1 if `greedy_optimal` is "greedy".
+        match offset: [int]. Offsets of matches found. Always size 1 if `greedy_optimal` is "greedy".
     """
-    def find_match_hashchain(self, s, search_idx, match_idx) -> (int, int):
+    def find_match_hashchain(self, s, search_idx, match_idx, greedy_optimal) -> (int, [int], [int]):
         assert match_idx >= search_idx, f"Match index at {match_idx} starts before search index at {search_idx}"
-        max_match_length, offset = 0, -1
+        match_count = 0
+        max_match_length = 0
+        lengths, offsets = [], []
         prefix_to_hash = s[match_idx : match_idx + HASH_NUM_BYTES]
         hash_key = hash(prefix_to_hash) & self.window_mask
         # Only search since search_idx
@@ -149,17 +280,21 @@ class LZSSEncoder(DataEncoder):
             while cur_search_idx >= search_idx and num_hash_searched < NUM_HASH_TO_SEARCH:
                 assert match_idx >= cur_search_idx, f"Match index at {match_idx} starts before current search index at {cur_search_idx}"
                 cur_match_length = self.match_length(s, cur_search_idx, match_idx)
-                if cur_match_length > max_match_length:
-                    max_match_length, offset = cur_match_length, match_idx - cur_search_idx
-                    # print("max_match_length: {}, offset: {}".format(max_match_length, offset))
+                if greedy_optimal == "greedy":
+                    if cur_match_length > max_match_length:
+                        lengths, offsets = [cur_match_length], [match_idx - cur_search_idx]
+                        max_match_length = cur_match_length
+                        match_count = 1
+                elif greedy_optimal == "optimal":
+                    if cur_match_length > 0:
+                        lengths.append(cur_match_length)
+                        offsets.append(match_idx - cur_search_idx)
+                        match_count += 1
                 num_hash_searched += 1
                 cur_search_idx = self.chained_prev[cur_search_idx & self.window_mask]
-            # print("match_idx: {}, chain_prev: {}".format(match_idx, self.hash_table[hash_key]))
             self.chained_prev[match_idx & self.window_mask] = self.hash_table[hash_key]
             self.hash_table[hash_key] = match_idx
-        # print("prefix_to_hash: {}; hash_key:{}".format(prefix_to_hash, hash_key))
-        # print(self.hash_table)
-        return max_match_length, offset
+        return match_count, lengths, offsets
 
     """
     Find longest matching substring starting from match_idx and search_idx
@@ -178,10 +313,6 @@ class LZSSEncoder(DataEncoder):
             cur_search += 1
             cur_match += 1
         return length
-
-    def block_to_table(self, data_block: DataBlock) -> list:
-        table = self.encode_literal(''.join(data_block.data_list))
-        return table
 
     """
     Format of table:
@@ -335,11 +466,11 @@ class LZSSDecoder(DataDecoder):
         return self.table_to_block(self.binary_to_table_optimized(binary))
 
 
-
 if __name__ == "__main__":
     TABLE_TYPE_ARGS = ["shortest", "merged"]
     FIND_MATCH_METHOD_ARGS = ["basic", "hashchain"]
     BINARY_TYPE_ARGS = ["baseline", "optimized"]
+    GREEDY_OPTIMAL = ["greedy", "optimal"]
     TEST_STRS = [
                  "abb"*3 + "cab",
                  "A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3,
@@ -347,97 +478,18 @@ if __name__ == "__main__":
                  "A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2
                 ]
 
-    def enc_dec_equality(s: str, table_type: str, find_match_method: str, binary_type: str):
-        encoder = LZSSEncoder(table_type, find_match_method, binary_type)
+    def enc_dec_equality(s: str, table_type: str, find_match_method: str, binary_type: str, greedy_optimal: str):
+        encoder = LZSSEncoder(table_type, find_match_method, binary_type, greedy_optimal)
         decoder = LZSSDecoder(binary_type)
         encoded = encoder.encoding(DataBlock(s))
         assert s == decoder.decoding(encoded)
-        print("{} encoded with {} using table type {} and {} has output length: {}".format(s, binary_type, table_type, find_match_method, len(encoded)))
+        print("{} encoded with {} using table type {} and {}/{} has output length: {}".format(s, binary_type, table_type, find_match_method, greedy_optimal, len(encoded)))
 
     for s in TEST_STRS:
         for table_type in TABLE_TYPE_ARGS:
             for find_match_method in FIND_MATCH_METHOD_ARGS:
                 for binary_type in BINARY_TYPE_ARGS:
-                    enc_dec_equality(s, table_type, find_match_method, binary_type)
+                    for greedy_optimal in GREEDY_OPTIMAL:
+                        enc_dec_equality(s, table_type, find_match_method, binary_type, greedy_optimal)
 
-    # encoder_s_b = LZSSEncoder("shortest", "hashchain", "baseline")
-    # encoder_m_b = LZSSEncoder("merged", "hashchain", "baseline")
-    # decoder_b = LZSSDecoder("baseline")
-    # encoder_s_o = LZSSEncoder("shortest", "hashchain", "optimized")
-    # encoder_m_o = LZSSEncoder("merged", "hashchain", "optimized")
-    # decoder_o = LZSSDecoder("optimized")
-    # [['ab', 1, 1], ['', 6, 3], ['c', 2, 4]]
-    # s = "abbabbabbcab"
-    # e1 = encoder_s_b.block_to_table(DataBlock(s))
-    # assert e1 == [['ab', 1, 1], ['', 6, 3], ['c', 2, 4]]
-    # assert s == decoder_b.table_to_block(e1)
-    # assert s == decoder_b.decoding(encoder_s_b.encoding(DataBlock(s)))
-    # assert s == decoder_o.decoding(encoder_s_o.encoding(DataBlock(s)))
-    # print(len(encoder_s_b.encoding(DataBlock(s))), len(encoder_s_o.encoding(DataBlock(s))))
 
-    # shortest: [['A', 1, 1], ['B', 6, 1], ['', 5, 9], ['CD', 4, 2]]
-    # other: [['AAB', 6, 1], ['', 5, 9], ['CD', 4, 2]]
-    # other: [['AABBBBBBB', 5, 9], ['CD', 4, 2]]
-    # merged: [['AABBBBBBBAABBBCD', 4, 2]]
-    # print(encode("A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3, "shortest"))
-    # print(encode("A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3, "merged"))
-    # s = "A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3
-    # e1, e2 = encoder_s_b.block_to_table(DataBlock(s)), encoder_m_b.block_to_table(DataBlock(s))
-    # assert e1 == [['A', 1, 1], ['B', 6, 1], ['', 5, 9], ['CD', 4, 2]]
-    # assert e2 == [['AABBBBBBBAABBBCD', 4, 2]]
-    # assert s == decoder_b.table_to_block(e1)
-    # assert s == decoder_b.table_to_block(e2)
-    # assert s == decoder_b.decoding(encoder_s_b.encoding(DataBlock(s)))
-    # assert s == decoder_b.decoding(encoder_m_b.encoding(DataBlock(s)))
-    # assert s == decoder_o.decoding(encoder_s_o.encoding(DataBlock(s)))
-    # assert s == decoder_o.decoding(encoder_m_o.encoding(DataBlock(s)))
-    # print(len(encoder_s_b.encoding(DataBlock(s))), len(encoder_s_o.encoding(DataBlock(s))))
-    # print(len(encoder_m_b.encoding(DataBlock(s))), len(encoder_m_o.encoding(DataBlock(s))))
-
-    # shortest: [['A', 1, 1], ['B', 17, 1], ['C', 1, 1], ['D', 1, 1]]
-    # merged: [['AAB', 17, 1], ['CCD', 1, 1]]
-    # print(encode("A"*2 + "B"*18 + "C"*2 + "D"*2, "shortest"))
-    # print(encode("A"*2 + "B"*18 + "C"*2 + "D"*2, "merged"))
-    # s = "A"*2 + "B"*18 + "C"*2 + "D"*2
-    # e1, e2 = encoder_s_b.block_to_table(DataBlock(s)), encoder_m_b.block_to_table(DataBlock(s))
-    # assert e1 == [['A', 1, 1], ['B', 17, 1], ['C', 1, 1], ['D', 1, 1]]
-    # assert e2 == [['AAB', 17, 1], ['CCD', 1, 1]]
-    # assert s == decoder_b.table_to_block(e1)
-    # assert s == decoder_b.table_to_block(e2)
-    # assert s == decoder_b.decoding(encoder_s_b.encoding(DataBlock(s)))
-    # assert s == decoder_b.decoding(encoder_m_b.encoding(DataBlock(s)))
-    # assert s == decoder_o.decoding(encoder_s_o.encoding(DataBlock(s)))
-    # assert s == decoder_o.decoding(encoder_m_o.encoding(DataBlock(s)))
-    # print(len(encoder_s_b.encoding(DataBlock(s))), len(encoder_s_o.encoding(DataBlock(s))))
-    # print(len(encoder_m_b.encoding(DataBlock(s))), len(encoder_m_o.encoding(DataBlock(s))))
-
-    # shortest: [['A', 1, 1], ['B', 17, 1], ['', 3, 20] ['C', 1, 1], ['D', 1, 1]]
-    # merged: [['AAB', 17, 1], ['', 3, 20], ['CCD', 1, 1]]
-    # print(encode("A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2, "shortest"))
-    # print(encode("A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2, "merged"))
-    # s = "A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2
-    # e1, e2 = encoder_s_b.block_to_table(DataBlock(s)), encoder_m_b.block_to_table(DataBlock(s))
-    # assert e1 == [['A', 1, 1], ['B', 17, 1], ['', 3, 20], ['C', 1, 1], ['D', 1, 1]]
-    # assert e2 == [['AAB', 17, 1], ['', 3, 20], ['CCD', 1, 1]]
-    # assert s == decoder_b.table_to_block(e1)
-    # assert s == decoder_b.table_to_block(e2)
-    # assert s == decoder_b.decoding(encoder_s_b.encoding(DataBlock(s)))
-    # assert s == decoder_b.decoding(encoder_m_b.encoding(DataBlock(s)))
-    # assert s == decoder_o.decoding(encoder_s_o.encoding(DataBlock(s)))
-    # assert s == decoder_o.decoding(encoder_m_o.encoding(DataBlock(s)))
-    # print(len(encoder_s_b.encoding(DataBlock(s))), len(encoder_s_o.encoding(DataBlock(s))))
-    # print(len(encoder_m_b.encoding(DataBlock(s))), len(encoder_m_o.encoding(DataBlock(s))))
-
-    # t1 = [['ab', 1, 1], ['', 6, 3], ['c', 2, 4]]
-    # t2 = []
-    # t3 = [['abcd', 1, 1], ['', 1, 3], ['', 5, 11]]
-    # assert t1 == decoder_b.binary_to_table_baseline(encoder_s_b.table_to_binary_baseline(t1))
-    # assert t2 == decoder_b.binary_to_table_baseline(encoder_s_b.table_to_binary_baseline(t2))
-    # assert t3 == decoder_b.binary_to_table_baseline(encoder_s_b.table_to_binary_baseline(t3))
-    # assert t1 == decoder_o.binary_to_table_optimized(encoder_s_o.table_to_binary_optimized(t1))
-    # assert t2 == decoder_o.binary_to_table_optimized(encoder_s_o.table_to_binary_optimized(t2))
-    # assert t3 == decoder_o.binary_to_table_optimized(encoder_s_o.table_to_binary_optimized(t3))
-
-    # t1 = [['abcdef', 1, 1], ['', 1, 3], ['', 1, 3], ['', 1, 3], ['', 5, 11], ['', 5, 11], ['efefsfsdf', 5, 11]]
-    # assert t1 == decoder_b.binary_to_table_optimized(encoder_s_b.table_to_binary_optimized(t1))
-    # print(len(encoder_s_b.table_to_binary_baseline(t1)), len(encoder_s_o.table_to_binary_optimized(t1)))
