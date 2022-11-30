@@ -6,10 +6,13 @@ from core.prob_dist import ProbabilityDist
 from utils.bitarray_utils import BitArray, bitarray_to_uint, uint_to_bitarray
 import functools
 import math
+import os
+import hashlib
+from collections import defaultdict
 
 SIZE_BYTE = 32
 MAX_WINDOW_SIZE = 1024
-HASH_NUM_BYTES = 3
+HASH_NUM_BYTES = 10
 NUM_HASH_TO_SEARCH = 16
 MAX_MATCH_SIZE = 1024
 
@@ -50,6 +53,7 @@ class LZSSEncoder(DataEncoder):
         if self.find_match_method == "hashchain":
             self.hash_table = dict() # key -> closest index of same key
             self.chained_prev = [0] * self.window_size # storing the last index of same key
+            # self.hash_collision_check = defaultdict(set)
 
     """
     Parse a datablock by the selected method into a table
@@ -65,6 +69,7 @@ class LZSSEncoder(DataEncoder):
             table = self.greedy_parsing(''.join(data_block.data_list))
         elif self.greedy_optimal == "optimal":
             table = self.optimal_parsing(''.join(data_block.data_list))
+        # print(table)
         return table
 
     """
@@ -96,24 +101,6 @@ class LZSSEncoder(DataEncoder):
                 match_idx += match_lengths[0]
         if unmatched != "":
             table.append([unmatched, 0, 0])
-        if self.table_type == "merged":
-            merged_table = []
-            merged_table.append(table[0])
-            for i in range(1, len(table)):
-                if (merged_table[-1][0] != "") and (merged_table[-1][1] + len(table[i][0]) < self.row_size(table[i])):
-                    cur_unmatched, cur_length, cur_offset = merged_table[-1]
-                    if cur_length < cur_offset:
-                        to_repeat = cur_unmatched[cur_offset*(-1):cur_offset*(-1)+cur_length]
-                    else:
-                        to_repeat = cur_unmatched[cur_offset*(-1):]
-                    while cur_length > 0:
-                        cur_unmatched += to_repeat
-                        cur_length -= cur_offset
-                    cur_unmatched += table[i][0]
-                    merged_table[-1] = [cur_unmatched, table[i][1], table[i][2]]
-                else:
-                    merged_table.append(table[i])
-            return merged_table
         return table
 
     """
@@ -132,11 +119,10 @@ class LZSSEncoder(DataEncoder):
         lengths = [0] * (match_size + 1)
         dists = [0] * (match_size + 1)
         prices[0] = 0
-        search_idx, match_idx = 0, 0
 
         # forward pass
         for i in range(match_size):
-            lit_cost = prices[i] + self.literal_price(s[match_idx + i])
+            lit_cost = prices[i] + self.literal_price(s[i])
             if lit_cost < prices[i + 1]:
                 prices[i + 1] = lit_cost
                 lengths[i + 1] = 1
@@ -145,9 +131,9 @@ class LZSSEncoder(DataEncoder):
             # if i + 4 >= length:
             #     continue
             if self.find_match_method == "basic":
-                num_matches, match_len, match_dist = self.find_match_basic(s, search_idx, match_idx + i, "optimal")
+                num_matches, match_len, match_dist = self.find_match_basic(s, 0, i, "optimal")
             elif self.find_match_method == "hashchain":
-                num_matches, match_len, match_dist = self.find_match_hashchain(s, search_idx, match_idx + i, "optimal")
+                num_matches, match_len, match_dist = self.find_match_hashchain(s, 0, i, "optimal")
             for j in range(num_matches):
                 match_cost = prices[i] + self.match_price(match_len[j], match_dist[j])
                 if match_cost < prices[i + match_len[j]]:
@@ -161,7 +147,7 @@ class LZSSEncoder(DataEncoder):
         unmatched_literal = ""
         cur = match_size
         while cur > 0 and lengths[cur] == 1:
-            unmatched_literal = s[match_idx + cur - 1] + unmatched_literal
+            unmatched_literal = s[cur - 1] + unmatched_literal
             cur -= 1
         table.insert(0, [unmatched_literal, 0, 0])
         while cur > 0:
@@ -172,7 +158,7 @@ class LZSSEncoder(DataEncoder):
                 table.insert(0, [unmatched_literal, lengths[cur], dists[cur]])
                 cur -= lengths[cur]
             else:
-                unmatched_literal = s[match_idx + cur - 1] + unmatched_literal
+                unmatched_literal = s[cur - 1] + unmatched_literal
                 cur -= 1
         if unmatched_literal != "":
             table[0][0] = unmatched_literal
@@ -268,13 +254,19 @@ class LZSSEncoder(DataEncoder):
         max_match_length = 0
         lengths, offsets = [], []
         prefix_to_hash = s[match_idx : match_idx + HASH_NUM_BYTES]
-        hash_key = hash(prefix_to_hash) & self.window_mask
+        # hash_key = hashlib.sha256(bytes(prefix_to_hash, 'utf-8'))
+        # print(hash_key)
+        hash_key = hash(prefix_to_hash)
+
+        # self.hash_collision_check[hash_key] .add(prefix_to_hash)
+
         # Only search since search_idx
         # If current `hash_key` doesn't exist in `hash_table`, no same prefix has been seen
         if hash_key not in self.hash_table.keys():
             self.chained_prev[match_idx & self.window_mask] = -1
             self.hash_table[hash_key] = match_idx
         else:
+            # print("here")
             cur_search_idx = self.hash_table[hash_key]
             num_hash_searched = 0
             while cur_search_idx >= search_idx and num_hash_searched < NUM_HASH_TO_SEARCH:
@@ -467,23 +459,39 @@ class LZSSDecoder(DataDecoder):
 
 
 if __name__ == "__main__":
-    TABLE_TYPE_ARGS = ["shortest", "merged"]
-    FIND_MATCH_METHOD_ARGS = ["basic", "hashchain"]
-    BINARY_TYPE_ARGS = ["baseline", "optimized"]
-    GREEDY_OPTIMAL = ["greedy", "optimal"]
-    TEST_STRS = [
-                 "abb"*3 + "cab",
-                 "A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3,
-                 "A"*2 + "B"*18 + "C"*2 + "D"*2,
-                 "A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2
-                ]
+
+    def read_as_test_str(path: str):
+        with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), path)) as f:
+            contents = f.read()
+        return contents
 
     def enc_dec_equality(s: str, table_type: str, find_match_method: str, binary_type: str, greedy_optimal: str):
         encoder = LZSSEncoder(table_type, find_match_method, binary_type, greedy_optimal)
         decoder = LZSSDecoder(binary_type)
         encoded = encoder.encoding(DataBlock(s))
+        # print(encoder.hash_collision_check)
+        # output_list = [li for li in difflib.ndiff(s, decoder.decoding(encoded)) if li[0] != ' ']
+        # print(output_list)
+        print(decoder.decoding(encoded))
         assert s == decoder.decoding(encoded)
-        print("{} encoded with {} using table type {} and {}/{} has output length: {}".format(s, binary_type, table_type, find_match_method, greedy_optimal, len(encoded)))
+        print("{} encoded with {} using table type {} and {}/{} has output length: {} and compression rate: {}".format("", binary_type, table_type, find_match_method, greedy_optimal, len(encoded)/8, len(encoded)/8/len(s)))
+
+    TABLE_TYPE_ARGS = ["shortest"]
+    FIND_MATCH_METHOD_ARGS = ["hashchain"]
+    BINARY_TYPE_ARGS = ["baseline"]
+    GREEDY_OPTIMAL = ["optimal"]
+    TEST_PATHS = [
+                    "../test/sof_cleaned.txt"
+                    ]
+    TEST_STRS = [
+                 # "abb"*3 + "cab",
+                 # "A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3,
+                 # "A"*2 + "B"*18 + "C"*2 + "D"*2,
+                 # "A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2,
+                 # "ABCABC"
+                ]
+    TEST_STRS.extend([read_as_test_str(path) for path in TEST_PATHS])
+    # print(len(TEST_STRS[0]))
 
     for s in TEST_STRS:
         for table_type in TABLE_TYPE_ARGS:
@@ -491,5 +499,7 @@ if __name__ == "__main__":
                 for binary_type in BINARY_TYPE_ARGS:
                     for greedy_optimal in GREEDY_OPTIMAL:
                         enc_dec_equality(s, table_type, find_match_method, binary_type, greedy_optimal)
+
+
 
 
