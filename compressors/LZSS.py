@@ -346,6 +346,8 @@ class LZSSEncoder(DataEncoder):
     '''
     def table_to_binary_optimized(self, table) -> BitArray:
         if len(table) == 0: return BitArray('')
+        # prepare for huffman
+        # concatenating all texts to one long string
         text = ''.join([x for x, _, _ in table])
         text = [ord(c) for c in text]
         counts = DataBlock(text).get_counts()
@@ -355,9 +357,9 @@ class LZSSEncoder(DataEncoder):
         for i in range(256):
             if i not in counts:
                 counts[i] = 0
-        counts_list = [counts[i] for i in range(256)]
-        counts_encoding = EliasDeltaUintEncoder().encode_block(DataBlock(counts_list))
-        ed_int_encoder = EliasDeltaUintEncoder()
+        counts_list, ed_int_encoder = [counts[i] for i in range(256)], EliasDeltaUintEncoder()
+        counts_encoding = ed_int_encoder.encode_block(DataBlock(counts_list))
+        # len(encoded texts) + encoded texts + len(encoded counts) + encoded counts
         ret = ed_int_encoder.encode_symbol(len(literal_encoding)) + literal_encoding + ed_int_encoder.encode_symbol(len(counts_encoding)) + counts_encoding
         min_match_len = min([x for _, x, _ in table])
         ret += ed_int_encoder.encode_symbol(min_match_len)
@@ -412,14 +414,13 @@ class LZSSDecoder(DataDecoder):
         ed_int_decoder = EliasDeltaUintDecoder()
         # number of bits for Huffman
         huffman_len, num_bits_consumed = ed_int_decoder.decode_symbol(input_bitarray)
-        huffman_text = input_bitarray[num_bits_consumed : (huffman_len + num_bits_consumed)]
-        rest_table = input_bitarray[(huffman_len + num_bits_consumed) : ]
-        count_len, num_bits_consumed = ed_int_decoder.decode_symbol(rest_table)
-        count = rest_table[num_bits_consumed : (count_len + num_bits_consumed)]
-        rest_table = rest_table[(count_len + num_bits_consumed) : ]
+        huffman_text, huffman_text_len = input_bitarray[num_bits_consumed : (huffman_len + num_bits_consumed)], huffman_len + num_bits_consumed
+        count_len, n = ed_int_decoder.decode_symbol(input_bitarray[huffman_text_len : ])
+        count = input_bitarray[(huffman_text_len + n) : (huffman_text_len + count_len + n)]
+        rest_table = input_bitarray[(huffman_text_len + count_len + n) : ]
+        num_bits_consumed += n
         # min match length
-        min_match_len, num_bits_consumed = ed_int_decoder.decode_symbol(rest_table)
-        ret = []
+        (min_match_len, num_bits_consumed), ret = ed_int_decoder.decode_symbol(rest_table), []
         while num_bits_consumed < len(rest_table):
             # pattern
             pattern_len, n = ed_int_decoder.decode_symbol(rest_table[num_bits_consumed : ])
@@ -427,18 +428,19 @@ class LZSSDecoder(DataDecoder):
             # match length
             match_len, n = ed_int_decoder.decode_symbol(rest_table[num_bits_consumed : ])
             num_bits_consumed += n
-            match_len += min_match_len
             # match offset
             match_offset, n = ed_int_decoder.decode_symbol(rest_table[num_bits_consumed : ])
             num_bits_consumed += n
-            ret.append([pattern_len, match_len, match_offset])
+            # append to table
+            ret.append([pattern_len, match_len + min_match_len, match_offset])
+        # decoding texts
         literal_counts, _ = ed_int_decoder.decode_block(count)
         literal_counts = literal_counts.data_list
-        literal_counts = {i: literal_counts[i] for i in range(256) if literal_counts[i] > 0}
-        prob_dist = ProbabilityDist.normalize_prob_dict(literal_counts)
+        prob_dist = ProbabilityDist.normalize_prob_dict({i: literal_counts[i] for i in range(256) if literal_counts[i] > 0})
         decoded_literals, _ = HuffmanDecoder(prob_dist).decode_block(huffman_text)
         decoded_literals = [chr(c) for c in decoded_literals.data_list]
         cnt = 0
+        # add to returning table
         for i in range(len(ret)):
             l = ret[i][0]
             ret[i][0] = ''.join(decoded_literals[cnt : (cnt + l)])
