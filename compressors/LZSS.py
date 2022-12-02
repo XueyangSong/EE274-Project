@@ -64,13 +64,13 @@ class LZSSEncoder(DataEncoder):
         Format of output table:
         Unmatched literals | Match length | Match offset
     """
-    def block_to_table(self, data_block: DataBlock) -> list:
+    def block_to_table(self, data_block: DataBlock) -> (list, str):
         if self.greedy_optimal == "greedy":
             table = self.greedy_parsing(''.join(data_block.data_list))
         elif self.greedy_optimal == "optimal":
             table = self.optimal_parsing(''.join(data_block.data_list))
         # print(table)
-        return table
+        return table, ""
 
     """
     Greedily construct the encoding table
@@ -374,9 +374,10 @@ class LZSSEncoder(DataEncoder):
         return ret
 
     def encoding(self, data_block: DataBlock) -> BitArray:
+        table, ending = self.block_to_table(data_block)
         if self.binary_type == "baseline":
-            return self.table_to_binary_baseline(self.block_to_table(data_block))
-        return self.table_to_binary_optimized(self.block_to_table(data_block))
+            return self.table_to_binary_baseline(table) + ending
+        return self.table_to_binary_optimized(table) + ending
 
 class LZSSDecoder(DataDecoder):
     def __init__(self, binary_type):
@@ -478,19 +479,19 @@ if __name__ == "__main__":
 
     TABLE_TYPE_ARGS = ["shortest"]
     FIND_MATCH_METHOD_ARGS = ["hashchain"]
-    BINARY_TYPE_ARGS = ["baseline"]
+    BINARY_TYPE_ARGS = ["baseline", "optimized"]
     GREEDY_OPTIMAL = ["optimal"]
     TEST_PATHS = [
                     "../test/sof_cleaned.txt"
                     ]
     TEST_STRS = [
-                 # "abb"*3 + "cab",
-                 # "A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3,
-                 # "A"*2 + "B"*18 + "C"*2 + "D"*2,
-                 # "A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2,
-                 # "ABCABC"
+                 "abb"*3 + "cab",
+                 "A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3,
+                 "A"*2 + "B"*18 + "C"*2 + "D"*2,
+                 "A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2,
+                 "ABCABC"
                 ]
-    TEST_STRS.extend([read_as_test_str(path) for path in TEST_PATHS])
+    # TEST_STRS.extend([read_as_test_str(path) for path in TEST_PATHS])
     # print(len(TEST_STRS[0]))
 
     for s in TEST_STRS:
@@ -499,7 +500,3 @@ if __name__ == "__main__":
                 for binary_type in BINARY_TYPE_ARGS:
                     for greedy_optimal in GREEDY_OPTIMAL:
                         enc_dec_equality(s, table_type, find_match_method, binary_type, greedy_optimal)
-
-
-
-
