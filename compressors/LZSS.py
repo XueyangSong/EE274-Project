@@ -64,13 +64,13 @@ class LZSSEncoder(DataEncoder):
         Format of output table:
         Unmatched literals | Match length | Match offset
     """
-    def block_to_table(self, data_block: DataBlock) -> (list, str):
+    def block_to_table(self, data_block: DataBlock) -> list:
         if self.greedy_optimal == "greedy":
             table = self.greedy_parsing(''.join(data_block.data_list))
         elif self.greedy_optimal == "optimal":
             table = self.optimal_parsing(''.join(data_block.data_list))
         # print(table)
-        return table, ""
+        return table
 
     """
     Greedily construct the encoding table
@@ -363,10 +363,7 @@ class LZSSEncoder(DataEncoder):
         ret += ed_int_encoder.encode_symbol(min_match_len)
         for pattern, match_len, match_offset in table:
             # pattern
-            if pattern == '': ret += BitArray('0')
-            else:
-                ret += BitArray('1')
-                ret += ed_int_encoder.encode_symbol(len(pattern))
+            ret += ed_int_encoder.encode_symbol(len(pattern))
             # match lenth
             ret += ed_int_encoder.encode_symbol(match_len - min_match_len)
             # match offset
@@ -374,10 +371,9 @@ class LZSSEncoder(DataEncoder):
         return ret
 
     def encoding(self, data_block: DataBlock) -> BitArray:
-        table, ending = self.block_to_table(data_block)
         if self.binary_type == "baseline":
-            return self.table_to_binary_baseline(table) + ending
-        return self.table_to_binary_optimized(table) + ending
+            return self.table_to_binary_baseline(self.block_to_table(data_block))
+        return self.table_to_binary_optimized(self.block_to_table(data_block))
 
 class LZSSDecoder(DataDecoder):
     def __init__(self, binary_type):
@@ -426,12 +422,8 @@ class LZSSDecoder(DataDecoder):
         ret = []
         while num_bits_consumed < len(rest_table):
             # pattern
-            num_bits_consumed += 1
-            if rest_table[num_bits_consumed - 1] == 0:
-                pattern_len = 0
-            else:
-                pattern_len, n = ed_int_decoder.decode_symbol(rest_table[num_bits_consumed : ])
-                num_bits_consumed += n
+            pattern_len, n = ed_int_decoder.decode_symbol(rest_table[num_bits_consumed : ])
+            num_bits_consumed += n
             # match length
             match_len, n = ed_int_decoder.decode_symbol(rest_table[num_bits_consumed : ])
             num_bits_consumed += n
