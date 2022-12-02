@@ -361,6 +361,11 @@ class LZSSEncoder(DataEncoder):
         counts_encoding = ed_int_encoder.encode_block(DataBlock(counts_list))
         # len(encoded texts) + encoded texts + len(encoded counts) + encoded counts
         ret = ed_int_encoder.encode_symbol(len(literal_encoding)) + literal_encoding + ed_int_encoder.encode_symbol(len(counts_encoding)) + counts_encoding
+        # if only one row in table
+        if len(table) == 1: return ret
+        # if last row end with 0 -> not encoding last row
+        if table[-1][1] == 0:
+            table = table[:-1]
         min_match_len = min([x for _, x, _ in table])
         ret += ed_int_encoder.encode_symbol(min_match_len)
         for pattern, match_len, match_offset in table:
@@ -418,7 +423,16 @@ class LZSSDecoder(DataDecoder):
         count_len, n = ed_int_decoder.decode_symbol(input_bitarray[huffman_text_len : ])
         count = input_bitarray[(huffman_text_len + n) : (huffman_text_len + count_len + n)]
         rest_table = input_bitarray[(huffman_text_len + count_len + n) : ]
-        num_bits_consumed += n
+
+        # decoding texts
+        literal_counts, _ = ed_int_decoder.decode_block(count)
+        literal_counts = literal_counts.data_list
+        prob_dist = ProbabilityDist.normalize_prob_dict({i: literal_counts[i] for i in range(256) if literal_counts[i] > 0})
+        decoded_literals, _ = HuffmanDecoder(prob_dist).decode_block(huffman_text)
+        decoded_literals = [chr(c) for c in decoded_literals.data_list]
+
+        # if reaching the end -> only one row in table
+        if not len(rest_table): return [[''.join(decoded_literals), 0, 0]]
         # min match length
         (min_match_len, num_bits_consumed), ret = ed_int_decoder.decode_symbol(rest_table), []
         while num_bits_consumed < len(rest_table):
@@ -433,18 +447,13 @@ class LZSSDecoder(DataDecoder):
             num_bits_consumed += n
             # append to table
             ret.append([pattern_len, match_len + min_match_len, match_offset])
-        # decoding texts
-        literal_counts, _ = ed_int_decoder.decode_block(count)
-        literal_counts = literal_counts.data_list
-        prob_dist = ProbabilityDist.normalize_prob_dict({i: literal_counts[i] for i in range(256) if literal_counts[i] > 0})
-        decoded_literals, _ = HuffmanDecoder(prob_dist).decode_block(huffman_text)
-        decoded_literals = [chr(c) for c in decoded_literals.data_list]
         cnt = 0
         # add to returning table
         for i in range(len(ret)):
             l = ret[i][0]
             ret[i][0] = ''.join(decoded_literals[cnt : (cnt + l)])
             cnt += l
+        if cnt < len(decoded_literals): ret.append([''.join(decoded_literals[cnt:]), 0, 0])
         return ret
 
     def decoding(self, binary):
