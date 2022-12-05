@@ -9,6 +9,8 @@ import math
 import os
 import hashlib
 from collections import defaultdict, Counter
+import numpy as np
+import pandas as pd
 
 SIZE_BYTE = 32
 MAX_WINDOW_SIZE = 1024
@@ -776,37 +778,6 @@ def normalizeFrequencies(d):
     return d
 
 if __name__ == "__main__":
-    # print(formSubrange(5, 16))
-    # print(formSubrange(3, 16))
-    # print(formUniformList([1,1,6,1,2,2,3]))
-    # print(formSubrange(1, 16))
-    # print(normalizeFrequencies({1:1}))
-    # print(normalizeFrequencies({1:1, 2:3}))
-    # print(normalizeFrequencies({1:8}))
-    # print(normalizeFrequencies({1:1, 2:6}))
-    # l = [1,2,3]
-    # print(decoding_num_distribution(encoding_num_distribution(l)))
-    # print(decoding_ascii_distribution(encoding_ascii_distribution(['A','B'])))
-    # l = ['A','A','A','A','A','B','B','B','B','B','C','C','C','D','D','D']
-    # print(encoding_process(l, 'BCDA'))
-    # print(decoding_process(l, encoding_process(l, 'BCDA')))
-    # l = ['a', 'b', 'c', 'c']
-    # print(encoding_process(l, 'abcc'))  abbabbabbcab
-    # print(decoding_process(l, encoding_process(l, 'abcc')))
-    # l = 'AABBBBBBBAABBBCDCDCDEEEEE'
-    # d = normalizeFrequencies(dict(Counter(l)))
-    # print(d)
-    #
-    encoder = LZSSEncoder("shortest", "hashchain", "baseline", "optimal")
-    decoder = LZSSDecoder("baseline")
-    # print(encoder.table_to_binary_fse([['abcc', 1, 4]]))
-    e = encoder.table_to_binary_fse([['AABBBBBBBAABBBCDCDCDEEEEE', 0, 0]])
-    print("after encoding")
-    d = decoder.binary_to_table_fse(e)
-    print(d)
-
-
-
     # def read_as_test_str(path: str):
     #     with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), path)) as f:
     #         contents = f.read()
@@ -822,6 +793,7 @@ if __name__ == "__main__":
         print(decoder.decoding(encoded))
         assert s == decoder.decoding(encoded)
         print("{} encoded with {} using table type {} and {}/{} has output length: {} and compression rate: {}".format("", binary_type, table_type, find_match_method, greedy_optimal, len(encoded)/8, len(encoded)/8/len(s)))
+        return len(encoded)/8/len(s)
     #
     TABLE_TYPE_ARGS = ["shortest"]
     FIND_MATCH_METHOD_ARGS = ["hashchain"]
@@ -836,14 +808,53 @@ if __name__ == "__main__":
                  "A"*2 + "B"*18 + "C"*2 + "D"*2,
                  "A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2,
                  "ABCABC",
-                 "A" * 100 + "B" * 99 + "ACCC" * 100 + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 100
+                 # "A" * 100 + "B" * 99 + "ACCC" * 100 + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 100
                 ]
     # TEST_STRS.extend([read_as_test_str(path) for path in TEST_PATHS])
     # print(len(TEST_STRS[0]))
 
+    # for s in TEST_STRS:
+    #     for table_type in TABLE_TYPE_ARGS:
+    #         for find_match_method in FIND_MATCH_METHOD_ARGS:
+    #             for binary_type in BINARY_TYPE_ARGS:
+    #                 for greedy_optimal in GREEDY_OPTIMAL:
+    #                     enc_dec_equality(s, table_type, find_match_method, binary_type, greedy_optimal)
+    #
+
+    # binary types
+    l = []
+    for bin_type in BINARY_TYPE_ARGS:
+        l.extend([bin_type] * len(GREEDY_OPTIMAL) * len(FIND_MATCH_METHOD_ARGS))
+    A = np.array(l)
+    # print(A)
+
+    # find match methods
+    l = []
+    for method in FIND_MATCH_METHOD_ARGS:
+        l.extend([method] * len(GREEDY_OPTIMAL))
+    l = l * len(BINARY_TYPE_ARGS)
+    B = np.array(l)
+    # print(B)
+
+    # greedy or optimal
+    l = GREEDY_OPTIMAL * len(FIND_MATCH_METHOD_ARGS * len(BINARY_TYPE_ARGS))
+    C = np.array(l)
+    # print(C)
+
+    # column
+    l = []
     for s in TEST_STRS:
+        to_append = []
         for table_type in TABLE_TYPE_ARGS:
             for find_match_method in FIND_MATCH_METHOD_ARGS:
-                for binary_type in BINARY_TYPE_ARGS:
-                    for greedy_optimal in GREEDY_OPTIMAL:
-                        enc_dec_equality(s, table_type, find_match_method, binary_type, greedy_optimal)
+                for greedy_optimal in GREEDY_OPTIMAL:
+                    for binary_type in BINARY_TYPE_ARGS:
+                        # to_append.append(1)
+                        to_append.append(enc_dec_equality(s, table_type, find_match_method, binary_type, greedy_optimal))
+        l.append(to_append)
+    D = np.array(l)
+    print()
+    print()
+    print()
+    df = pd.DataFrame(data=D, columns=pd.MultiIndex.from_tuples(zip(A,B,C)))
+    print(df)
