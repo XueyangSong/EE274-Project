@@ -345,7 +345,6 @@ class LZSSEncoder(DataEncoder):
                 - Elias Delta encoded int (match offset)
     '''
     def table_to_binary_optimized(self, table) -> BitArray:
-        # print(table)
         if len(table) == 0: return BitArray('')
         # prepare for huffman
         # concatenating all texts to one long string
@@ -360,7 +359,6 @@ class LZSSEncoder(DataEncoder):
                 counts[i] = 0
         counts_list, ed_int_encoder = [counts[i] for i in range(256)], EliasDeltaUintEncoder()
         counts_encoding = ed_int_encoder.encode_block(DataBlock(counts_list))
-        # len(encoded texts) + encoded texts + len(encoded counts) + encoded counts
         ret = ed_int_encoder.encode_symbol(len(literal_encoding)) + literal_encoding + ed_int_encoder.encode_symbol(len(counts_encoding)) + counts_encoding
         # if only one row in table
         if len(table) == 1: return ret
@@ -403,7 +401,6 @@ class LZSSEncoder(DataEncoder):
         - fse encoded match_offset text with encoding_process
     '''
     def table_to_binary_fse(self, table) -> BitArray:
-        # print(table)
         '''
         l is the list of ints to be encoded
 
@@ -467,9 +464,6 @@ class LZSSEncoder(DataEncoder):
                 else:
                     len_to_write = int(math.log2(l1))
                     index_subrange = prev_state % l1
-                    # if len_to_write == 0: offset_subrange = BitArray('')
-                    # else: offset_subrange = uint_to_bitarray(index_subrange, len_to_write)
-                    # ret += offset_subrange
                     if len_to_write != 0: ret += uint_to_bitarray(index_subrange, len_to_write)
                     # update prev_state
                     cnt = 0
@@ -672,8 +666,6 @@ class LZSSDecoder(DataDecoder):
         encoded_pattern_distribution = input_bitarray[ : len_pattern_distritbution]
         input_bitarray = input_bitarray[len_pattern_distritbution : ]
         pattern_distritbution = decoding_ascii_distribution(encoded_pattern_distribution)
-        # print("after decoding pattern_distritbution")
-        # print("distribution of decoding:", pattern_distritbution)
 
         len_pattern, num_bits_consumed = decoder.decode_symbol(input_bitarray)
         input_bitarray = input_bitarray[num_bits_consumed : ]
@@ -681,7 +673,6 @@ class LZSSDecoder(DataDecoder):
         input_bitarray = input_bitarray[len_pattern : ]
         l = formUniformList(pattern_distritbution)
         pattern = decoding_process(l, encoded_pattern)
-        # print("after decoding pattern")
 
         # pattern_len_list
         len_pattern_len_distritbution, num_bits_consumed = decoder.decode_symbol(input_bitarray)
@@ -689,7 +680,6 @@ class LZSSDecoder(DataDecoder):
         encoded_pattern_len_distribution = input_bitarray[ : len_pattern_len_distritbution]
         input_bitarray = input_bitarray[len_pattern_len_distritbution : ]
         pattern_len_distritbution = decoding_num_distribution(encoded_pattern_len_distribution)
-        # print("after decoding pattern_len_distritbution")
 
         len_pattern_len, num_bits_consumed = decoder.decode_symbol(input_bitarray)
         input_bitarray = input_bitarray[num_bits_consumed : ]
@@ -697,7 +687,6 @@ class LZSSDecoder(DataDecoder):
         input_bitarray = input_bitarray[len_pattern_len : ]
         l = formUniformList(pattern_len_distritbution)
         pattern_len_list = decoding_process(l, encoded_pattern_len)
-        # print("after decoding pattern_len_list")
 
         # min_match_len
         min_match_len, num_bits_consumed = decoder.decode_symbol(input_bitarray)
@@ -709,7 +698,6 @@ class LZSSDecoder(DataDecoder):
         encoded_match_len_distribution = input_bitarray[ : len_match_len_distritbution]
         input_bitarray = input_bitarray[len_match_len_distritbution : ]
         match_len_distritbution = decoding_num_distribution(encoded_match_len_distribution)
-        # print("after decoding match_len_distritbution")
 
         len_match_len, num_bits_consumed = decoder.decode_symbol(input_bitarray)
         input_bitarray = input_bitarray[num_bits_consumed : ]
@@ -717,7 +705,6 @@ class LZSSDecoder(DataDecoder):
         input_bitarray = input_bitarray[len_match_len : ]
         l = formUniformList(match_len_distritbution)
         match_len_list = decoding_process(l, encoded_match_len)
-        # print("after decoding match_len_list")
 
         # match_offset_list
         len_match_offset_distritbution, num_bits_consumed = decoder.decode_symbol(input_bitarray)
@@ -725,7 +712,6 @@ class LZSSDecoder(DataDecoder):
         encoded_match_offset_distribution = input_bitarray[ : len_match_offset_distritbution]
         input_bitarray = input_bitarray[len_match_offset_distritbution : ]
         match_offset_distritbution = decoding_num_distribution(encoded_match_offset_distribution)
-        # print("after decoding match_offset_distritbution")
 
         len_match_offset, num_bits_consumed = decoder.decode_symbol(input_bitarray)
         input_bitarray = input_bitarray[num_bits_consumed : ]
@@ -733,7 +719,6 @@ class LZSSDecoder(DataDecoder):
         input_bitarray = input_bitarray[len_match_offset : ]
         l = formUniformList(match_offset_distritbution)
         match_offset_list = decoding_process(l, encoded_match_offset)
-        # print("after decoding match_offset_list")
 
         temp = list(zip(pattern_len_list, [x + min_match_len for x in match_len_list], match_offset_list))
         ptr = 0
