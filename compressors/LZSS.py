@@ -345,7 +345,7 @@ class LZSSEncoder(DataEncoder):
                 - Elias Delta encoded int (match offset)
     '''
     def table_to_binary_optimized(self, table) -> BitArray:
-        print(table)
+        # print(table)
         if len(table) == 0: return BitArray('')
         # prepare for huffman
         # concatenating all texts to one long string
@@ -403,7 +403,7 @@ class LZSSEncoder(DataEncoder):
         - fse encoded match_offset text with encoding_process
     '''
     def table_to_binary_fse(self, table) -> BitArray:
-        print(table)
+        # print(table)
         '''
         l is the list of ints to be encoded
 
@@ -487,6 +487,7 @@ class LZSSEncoder(DataEncoder):
         patterns = ''.join([t for t, _, _ in table])
         d = normalizeFrequencies(dict(Counter(patterns)))
         encoded_pattern_distribution = encoding_ascii_distribution(d)
+        # print("in encoding, the pattern is:", d)
         l = formUniformList(d)
         encoded_pattern = encoding_process(l, patterns)
         ret = encoder.encode_symbol(len(encoded_pattern_distribution)) + encoded_pattern_distribution + encoder.encode_symbol(len(encoded_pattern)) + encoded_pattern
@@ -646,7 +647,7 @@ class LZSSDecoder(DataDecoder):
                     offset = bitarray_to_uint(offset)
 
                     new_state = offset + c1 * l1 + (cnt - c1 - 1) * l2
-                    print(l, new_state, len(l))
+                    # print(l, new_state, len(l))
                     ret.insert(0, l[new_state])
                     last_state = new_state
                     last_symbol = ret[0]
@@ -671,7 +672,8 @@ class LZSSDecoder(DataDecoder):
         encoded_pattern_distribution = input_bitarray[ : len_pattern_distritbution]
         input_bitarray = input_bitarray[len_pattern_distritbution : ]
         pattern_distritbution = decoding_ascii_distribution(encoded_pattern_distribution)
-        print("after decoding pattern_distritbution")
+        # print("after decoding pattern_distritbution")
+        # print("distribution of decoding:", pattern_distritbution)
 
         len_pattern, num_bits_consumed = decoder.decode_symbol(input_bitarray)
         input_bitarray = input_bitarray[num_bits_consumed : ]
@@ -679,7 +681,7 @@ class LZSSDecoder(DataDecoder):
         input_bitarray = input_bitarray[len_pattern : ]
         l = formUniformList(pattern_distritbution)
         pattern = decoding_process(l, encoded_pattern)
-        print("after decoding pattern")
+        # print("after decoding pattern")
 
         # pattern_len_list
         len_pattern_len_distritbution, num_bits_consumed = decoder.decode_symbol(input_bitarray)
@@ -687,7 +689,7 @@ class LZSSDecoder(DataDecoder):
         encoded_pattern_len_distribution = input_bitarray[ : len_pattern_len_distritbution]
         input_bitarray = input_bitarray[len_pattern_len_distritbution : ]
         pattern_len_distritbution = decoding_num_distribution(encoded_pattern_len_distribution)
-        print("after decoding pattern_len_distritbution")
+        # print("after decoding pattern_len_distritbution")
 
         len_pattern_len, num_bits_consumed = decoder.decode_symbol(input_bitarray)
         input_bitarray = input_bitarray[num_bits_consumed : ]
@@ -695,7 +697,7 @@ class LZSSDecoder(DataDecoder):
         input_bitarray = input_bitarray[len_pattern_len : ]
         l = formUniformList(pattern_len_distritbution)
         pattern_len_list = decoding_process(l, encoded_pattern_len)
-        print("after decoding pattern_len_list")
+        # print("after decoding pattern_len_list")
 
         # min_match_len
         min_match_len, num_bits_consumed = decoder.decode_symbol(input_bitarray)
@@ -707,7 +709,7 @@ class LZSSDecoder(DataDecoder):
         encoded_match_len_distribution = input_bitarray[ : len_match_len_distritbution]
         input_bitarray = input_bitarray[len_match_len_distritbution : ]
         match_len_distritbution = decoding_num_distribution(encoded_match_len_distribution)
-        print("after decoding match_len_distritbution")
+        # print("after decoding match_len_distritbution")
 
         len_match_len, num_bits_consumed = decoder.decode_symbol(input_bitarray)
         input_bitarray = input_bitarray[num_bits_consumed : ]
@@ -715,7 +717,7 @@ class LZSSDecoder(DataDecoder):
         input_bitarray = input_bitarray[len_match_len : ]
         l = formUniformList(match_len_distritbution)
         match_len_list = decoding_process(l, encoded_match_len)
-        print("after decoding match_len_list")
+        # print("after decoding match_len_list")
 
         # match_offset_list
         len_match_offset_distritbution, num_bits_consumed = decoder.decode_symbol(input_bitarray)
@@ -723,7 +725,7 @@ class LZSSDecoder(DataDecoder):
         encoded_match_offset_distribution = input_bitarray[ : len_match_offset_distritbution]
         input_bitarray = input_bitarray[len_match_offset_distritbution : ]
         match_offset_distritbution = decoding_num_distribution(encoded_match_offset_distribution)
-        print("after decoding match_offset_distritbution")
+        # print("after decoding match_offset_distritbution")
 
         len_match_offset, num_bits_consumed = decoder.decode_symbol(input_bitarray)
         input_bitarray = input_bitarray[num_bits_consumed : ]
@@ -731,7 +733,7 @@ class LZSSDecoder(DataDecoder):
         input_bitarray = input_bitarray[len_match_offset : ]
         l = formUniformList(match_offset_distritbution)
         match_offset_list = decoding_process(l, encoded_match_offset)
-        print("after decoding match_offset_list")
+        # print("after decoding match_offset_list")
 
         temp = list(zip(pattern_len_list, [x + min_match_len for x in match_len_list], match_offset_list))
         ptr = 0
@@ -782,7 +784,7 @@ def normalizeFrequencies(d):
     times = n_prime - sum(d.values())
     cnt = 0
     for c in d.keys():
-        if cnt <= times:
+        if cnt < times:
             d[c] += 1
             cnt += 1
         else: break
@@ -806,54 +808,57 @@ if __name__ == "__main__":
     # l = ['a', 'b', 'c', 'c']
     # print(encoding_process(l, 'abcc'))  abbabbabbcab
     # print(decoding_process(l, encoding_process(l, 'abcc')))
+    # l = 'AABBBBBBBAABBBCDCDCDEEEEE'
+    # d = normalizeFrequencies(dict(Counter(l)))
+    # print(d)
+    #
     encoder = LZSSEncoder("shortest", "hashchain", "baseline", "optimal")
     decoder = LZSSDecoder("baseline")
     # print(encoder.table_to_binary_fse([['abcc', 1, 4]]))
     e = encoder.table_to_binary_fse([['AABBBBBBBAABBBCDCDCDEEEEE', 0, 0]])
+    print("after encoding")
     d = decoder.binary_to_table_fse(e)
     print(d)
 
-    # l = 'AABBBBBBBAABBBCDCDCDEEEEE'
-    # d = normalizeFrequencies(dict(Counter(l)))
-    # print(d)
+
 
     # def read_as_test_str(path: str):
     #     with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), path)) as f:
     #         contents = f.read()
     #     return contents
     #
-    # def enc_dec_equality(s: str, table_type: str, find_match_method: str, binary_type: str, greedy_optimal: str):
-    #     encoder = LZSSEncoder(table_type, find_match_method, binary_type, greedy_optimal)
-    #     decoder = LZSSDecoder(binary_type)
-    #     encoded = encoder.encoding(DataBlock(s))
-    #     # print(encoder.hash_collision_check)
-    #     # output_list = [li for li in difflib.ndiff(s, decoder.decoding(encoded)) if li[0] != ' ']
-    #     # print(output_list)
-    #     print(decoder.decoding(encoded))
-    #     assert s == decoder.decoding(encoded)
-    #     print("{} encoded with {} using table type {} and {}/{} has output length: {} and compression rate: {}".format("", binary_type, table_type, find_match_method, greedy_optimal, len(encoded)/8, len(encoded)/8/len(s)))
-    # #
-    # TABLE_TYPE_ARGS = ["shortest"]
-    # FIND_MATCH_METHOD_ARGS = ["hashchain"]
-    # BINARY_TYPE_ARGS = ["baseline", "optimized", "fse"]
-    # GREEDY_OPTIMAL = ["optimal"]
-    # TEST_PATHS = [
-    #                 "../test/sof_cleaned.txt"
-    #                 ]
-    # TEST_STRS = [
-    #              "abb"*3 + "cab",
-    #              "A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3,
-    #              "A"*2 + "B"*18 + "C"*2 + "D"*2,
-    #              "A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2,
-    #              "ABCABC",
-    #              # "A" * 100 + "B" * 99 + "ACCC" * 100 + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 100
-    #             ]
-    # # TEST_STRS.extend([read_as_test_str(path) for path in TEST_PATHS])
-    # # print(len(TEST_STRS[0]))
+    def enc_dec_equality(s: str, table_type: str, find_match_method: str, binary_type: str, greedy_optimal: str):
+        encoder = LZSSEncoder(table_type, find_match_method, binary_type, greedy_optimal)
+        decoder = LZSSDecoder(binary_type)
+        encoded = encoder.encoding(DataBlock(s))
+        # print(encoder.hash_collision_check)
+        # output_list = [li for li in difflib.ndiff(s, decoder.decoding(encoded)) if li[0] != ' ']
+        # print(output_list)
+        print(decoder.decoding(encoded))
+        assert s == decoder.decoding(encoded)
+        print("{} encoded with {} using table type {} and {}/{} has output length: {} and compression rate: {}".format("", binary_type, table_type, find_match_method, greedy_optimal, len(encoded)/8, len(encoded)/8/len(s)))
     #
-    # for s in TEST_STRS:
-    #     for table_type in TABLE_TYPE_ARGS:
-    #         for find_match_method in FIND_MATCH_METHOD_ARGS:
-    #             for binary_type in BINARY_TYPE_ARGS:
-    #                 for greedy_optimal in GREEDY_OPTIMAL:
-    #                     enc_dec_equality(s, table_type, find_match_method, binary_type, greedy_optimal)
+    TABLE_TYPE_ARGS = ["shortest"]
+    FIND_MATCH_METHOD_ARGS = ["hashchain"]
+    BINARY_TYPE_ARGS = ["baseline", "optimized", "fse"]
+    GREEDY_OPTIMAL = ["optimal"]
+    TEST_PATHS = [
+                    "../test/sof_cleaned.txt"
+                    ]
+    TEST_STRS = [
+                 "abb"*3 + "cab",
+                 "A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3,
+                 "A"*2 + "B"*18 + "C"*2 + "D"*2,
+                 "A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2,
+                 "ABCABC",
+                 "A" * 100 + "B" * 99 + "ACCC" * 100 + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 100
+                ]
+    # TEST_STRS.extend([read_as_test_str(path) for path in TEST_PATHS])
+    # print(len(TEST_STRS[0]))
+
+    for s in TEST_STRS:
+        for table_type in TABLE_TYPE_ARGS:
+            for find_match_method in FIND_MATCH_METHOD_ARGS:
+                for binary_type in BINARY_TYPE_ARGS:
+                    for greedy_optimal in GREEDY_OPTIMAL:
+                        enc_dec_equality(s, table_type, find_match_method, binary_type, greedy_optimal)
