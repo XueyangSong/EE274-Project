@@ -345,6 +345,7 @@ class LZSSEncoder(DataEncoder):
                 - Elias Delta encoded int (match offset)
     '''
     def table_to_binary_optimized(self, table) -> BitArray:
+        print(table)
         if len(table) == 0: return BitArray('')
         # prepare for huffman
         # concatenating all texts to one long string
@@ -377,10 +378,154 @@ class LZSSEncoder(DataEncoder):
             ret += ed_int_encoder.encode_symbol(match_offset)
         return ret
 
+    '''
+    concatenation of:
+    - fse encoded patterns
+        - EliasDelta encoded int: len of encoded distribution
+        - encoded distribution with encoding_ascii_distribution
+        - EliasDelta encoded int: len of fse encoded patterns
+        - fse encoded pattern text with encoding_process
+    - fse encoded pattern_len
+        - EliasDelta encoded int: len of encoded distribution
+        - encoded distribution with encoding_num_distribution
+        - EliasDelta encoded int: len of encoded pattern_len
+        - fse encoded pattern_len text with encoding_process
+    - EliasDelta encoded int: min_match_len
+    - fse encoded match_len list
+        - EliasDelta encoded int: len of encoded distribution
+        - encoded distribution with encoding_num_distribution
+        - EliasDelta encoded int: len of encoded match_len
+        - fse encoded match_len text with encoding_process
+    - fse encoded match_offset list
+        - EliasDelta encoded int: len of encoded distribution
+        - encoded distribution with encoding_num_distribution
+        - EliasDelta encoded int: len of encoded match_offset
+        - fse encoded match_offset text with encoding_process
+    '''
+    def table_to_binary_fse(self, table) -> BitArray:
+        print(table)
+        '''
+        l is the list of ints to be encoded
+
+        - int : number of pairs to be looked up
+        - (int, int) : value and counts
+        '''
+        def encoding_num_distribution(d):
+            encoder = EliasDeltaUintEncoder()
+            ret = encoder.encode_symbol(len(d))
+            for k, v in d.items():
+                ret += (encoder.encode_symbol(k) + encoder.encode_symbol(v))
+            return ret
+
+        '''
+        l is the list of bytes to be encoded
+
+        - int (256 times): counts of each ascii value
+        '''
+        def encoding_ascii_distribution(l):
+            encoder = EliasDeltaUintEncoder()
+            d = normalizeFrequencies(dict(Counter(l)))
+            ret = BitArray()
+            for i in range(255):
+                if chr(i) not in d.keys(): ret += encoder.encode_symbol(0)
+                else: ret += encoder.encode_symbol(d[chr(i)])
+            return ret
+
+        '''
+        l is the uniformly distributed table generated
+        text is the text to be encoded (might be int or char)
+
+        concatenation of:
+        - final state
+        - offsets following decoding process
+        '''
+        def encoding_process(l, text):
+            denominator = len(l)
+            counter = Counter(l)
+            ret = BitArray()
+            prev_symbol = text[0]
+            prev_state = max(index for index, item in enumerate(l) if item == prev_symbol) #l.index(prev_symbol)
+            for curr_symbol in text[1:]:
+                l1, c1, l2, c2 = formSubrange(counter[curr_symbol], denominator)
+                # find subrange lie in
+                # lie in larger subrange
+                if l1 * c1 <= prev_state:
+                    len_to_write = int(math.log2(l2))
+                    index_subrange = (prev_state - l1 * c1) % l2
+                    offset_subrange = uint_to_bitarray(index_subrange, len_to_write)
+                    ret += offset_subrange
+                    # update prev_state
+                    cnt = 0
+                    for i, s in enumerate(l):
+                        if (cnt == (prev_state - c1 * l1) // l2 + c1) and (s == curr_symbol):
+                            prev_state = i
+                            break
+                        elif (s == curr_symbol):
+                            cnt += 1
+                    prev_symbol = curr_symbol
+                # lie in smaller subrange
+                else:
+                    len_to_write = int(math.log2(l1))
+                    index_subrange = prev_state % l1
+                    # if len_to_write == 0: offset_subrange = BitArray('')
+                    # else: offset_subrange = uint_to_bitarray(index_subrange, len_to_write)
+                    # ret += offset_subrange
+                    if len_to_write != 0: ret += uint_to_bitarray(index_subrange, len_to_write)
+                    # update prev_state
+                    cnt = 0
+                    for i, s in enumerate(l):
+                        if (cnt == prev_state // l1) and (s == curr_symbol):
+                            prev_state = i
+                            break
+                        elif (s == curr_symbol):
+                            cnt += 1
+                    prev_symbol = curr_symbol
+            return EliasDeltaUintEncoder().encode_symbol(prev_state) + EliasDeltaUintEncoder().encode_symbol(len(text)) + ret
+
+        encoder = EliasDeltaUintEncoder()
+        # encoding patterns
+        patterns = ''.join([t for t, _, _ in table])
+        d = normalizeFrequencies(dict(Counter(patterns)))
+        encoded_pattern_distribution = encoding_ascii_distribution(d)
+        l = formUniformList(d)
+        encoded_pattern = encoding_process(l, patterns)
+        ret = encoder.encode_symbol(len(encoded_pattern_distribution)) + encoded_pattern_distribution + encoder.encode_symbol(len(encoded_pattern)) + encoded_pattern
+        # pattern_len
+        pattern_list = [len(x) for x, _, _ in table]
+        d = normalizeFrequencies(dict(Counter(pattern_list)))
+        encoded_pattern_len_distribution = encoding_num_distribution(d)
+        l = formUniformList(d)
+        encoded_pattern_len = encoding_process(l, pattern_list)
+        ret += (encoder.encode_symbol(len(encoded_pattern_len_distribution)) + encoded_pattern_len_distribution)
+        ret += (encoder.encode_symbol(len(encoded_pattern_len)) + encoded_pattern_len)
+        # min_match_len
+        min_match_len = min([x for _, x, _ in table])
+        ret += encoder.encode_symbol(min_match_len)
+        # match_len_list
+        match_len_list = [x - min_match_len for _, x, _ in table]
+        d = normalizeFrequencies(dict(Counter(match_len_list)))
+        encoded_match_len_distribution = encoding_num_distribution(d)
+        l = formUniformList(d)
+        encoded_match_len = encoding_process(l, match_len_list)
+        ret += (encoder.encode_symbol(len(encoded_match_len_distribution)) + encoded_match_len_distribution)
+        ret += (encoder.encode_symbol(len(encoded_match_len)) + encoded_match_len)
+        # match_offset_list
+        match_offset_list = [x for _, _, x in table]
+        d = normalizeFrequencies(dict(Counter(match_offset_list)))
+        encoded_match_offset_distribution = encoding_num_distribution(d)
+        l = formUniformList(d)
+        encoded_match_offset = encoding_process(l, match_offset_list)
+        ret += (encoder.encode_symbol(len(encoded_match_offset_distribution)) + encoded_match_offset_distribution)
+        ret += (encoder.encode_symbol(len(encoded_match_offset)) + encoded_match_offset)
+
+        return ret
+
     def encoding(self, data_block: DataBlock) -> BitArray:
         if self.binary_type == "baseline":
             return self.table_to_binary_baseline(self.block_to_table(data_block))
-        return self.table_to_binary_optimized(self.block_to_table(data_block))
+        if self.binary_type == "optimized":
+            return self.table_to_binary_optimized(self.block_to_table(data_block))
+        return self.table_to_binary_fse(self.block_to_table(data_block))
 
 class LZSSDecoder(DataDecoder):
     def __init__(self, binary_type):
@@ -456,10 +601,152 @@ class LZSSDecoder(DataDecoder):
         if cnt < len(decoded_literals): ret.append([''.join(decoded_literals[cnt:]), 0, 0])
         return ret
 
+    def binary_to_table_fse(self, input_bitarray):
+        def decoding_num_distribution(input_bitarray):
+            decoder = EliasDeltaUintDecoder()
+            num, num_bits_consumed = decoder.decode_symbol(input_bitarray)
+            ret = dict()
+            for i in range(num):
+                k, n = decoder.decode_symbol(input_bitarray[num_bits_consumed : ])
+                v, n1 = decoder.decode_symbol(input_bitarray[num_bits_consumed + n: ])
+                num_bits_consumed += (n + n1)
+                ret[k] = v
+            return ret
+
+        def decoding_ascii_distribution(input_bitarray):
+            decoder, num_bits_consumed, ret = EliasDeltaUintDecoder(), 0, dict()
+            for i in range(255):
+                c, n = decoder.decode_symbol(input_bitarray[num_bits_consumed : ])
+                num_bits_consumed += n
+                if c != 0: ret[chr(i)] = c
+            return ret
+
+        def decoding_process(l, input_bitarray):
+            last_state, num_bits_consumed = EliasDeltaUintDecoder().decode_symbol(input_bitarray)
+            ret = [l[last_state]]
+            input_bitarray = input_bitarray[num_bits_consumed : ]
+            len_text, num_bits_consumed = EliasDeltaUintDecoder().decode_symbol(input_bitarray)
+            input_bitarray = input_bitarray[num_bits_consumed : ]
+            ptr = len(input_bitarray)
+            last_symbol = ret[0]
+            denominator = len(l)
+            counter = Counter(l)
+            for _ in range(len_text - 1):
+            #while ptr > 0 or max(index for index, item in enumerate(l) if item == last_symbol) == last_state:
+                l1, c1, l2, c2 = formSubrange(counter[last_symbol], denominator)
+                # find which subrange lie in
+                cnt = 1
+                for c in l[:last_state]:
+                    if c == last_symbol: cnt += 1
+                # lie in larger subrange
+                if cnt > c1:
+                    len_to_read = int(math.log2(l2))
+                    offset = input_bitarray[(ptr - len_to_read) : ptr]
+                    ptr -= len_to_read
+                    offset = bitarray_to_uint(offset)
+
+                    new_state = offset + c1 * l1 + (cnt - c1 - 1) * l2
+                    print(l, new_state, len(l))
+                    ret.insert(0, l[new_state])
+                    last_state = new_state
+                    last_symbol = ret[0]
+                # lie in smaller subrange
+                else:
+                    len_to_read = int(math.log2(l1))
+                    offset = input_bitarray[ptr - len_to_read : ptr]
+                    ptr -= len_to_read
+                    if len_to_read == 0 or len(offset) == 0: offset = 0
+                    else: offset = bitarray_to_uint(offset)
+
+                    new_state = offset + (cnt - 1) * l1
+                    ret.insert(0, l[new_state])
+                    last_state = new_state
+                    last_symbol = ret[0]
+            return ret
+
+        decoder = EliasDeltaUintDecoder()
+        # patterns
+        len_pattern_distritbution, num_bits_consumed = decoder.decode_symbol(input_bitarray)
+        input_bitarray = input_bitarray[num_bits_consumed : ]
+        encoded_pattern_distribution = input_bitarray[ : len_pattern_distritbution]
+        input_bitarray = input_bitarray[len_pattern_distritbution : ]
+        pattern_distritbution = decoding_ascii_distribution(encoded_pattern_distribution)
+        print("after decoding pattern_distritbution")
+
+        len_pattern, num_bits_consumed = decoder.decode_symbol(input_bitarray)
+        input_bitarray = input_bitarray[num_bits_consumed : ]
+        encoded_pattern = input_bitarray[ : len_pattern]
+        input_bitarray = input_bitarray[len_pattern : ]
+        l = formUniformList(pattern_distritbution)
+        pattern = decoding_process(l, encoded_pattern)
+        print("after decoding pattern")
+
+        # pattern_len_list
+        len_pattern_len_distritbution, num_bits_consumed = decoder.decode_symbol(input_bitarray)
+        input_bitarray = input_bitarray[num_bits_consumed : ]
+        encoded_pattern_len_distribution = input_bitarray[ : len_pattern_len_distritbution]
+        input_bitarray = input_bitarray[len_pattern_len_distritbution : ]
+        pattern_len_distritbution = decoding_num_distribution(encoded_pattern_len_distribution)
+        print("after decoding pattern_len_distritbution")
+
+        len_pattern_len, num_bits_consumed = decoder.decode_symbol(input_bitarray)
+        input_bitarray = input_bitarray[num_bits_consumed : ]
+        encoded_pattern_len = input_bitarray[ : len_pattern_len]
+        input_bitarray = input_bitarray[len_pattern_len : ]
+        l = formUniformList(pattern_len_distritbution)
+        pattern_len_list = decoding_process(l, encoded_pattern_len)
+        print("after decoding pattern_len_list")
+
+        # min_match_len
+        min_match_len, num_bits_consumed = decoder.decode_symbol(input_bitarray)
+        input_bitarray = input_bitarray[num_bits_consumed : ]
+
+        # match_len_list
+        len_match_len_distritbution, num_bits_consumed = decoder.decode_symbol(input_bitarray)
+        input_bitarray = input_bitarray[num_bits_consumed : ]
+        encoded_match_len_distribution = input_bitarray[ : len_match_len_distritbution]
+        input_bitarray = input_bitarray[len_match_len_distritbution : ]
+        match_len_distritbution = decoding_num_distribution(encoded_match_len_distribution)
+        print("after decoding match_len_distritbution")
+
+        len_match_len, num_bits_consumed = decoder.decode_symbol(input_bitarray)
+        input_bitarray = input_bitarray[num_bits_consumed : ]
+        encoded_match_len = input_bitarray[ : len_match_len]
+        input_bitarray = input_bitarray[len_match_len : ]
+        l = formUniformList(match_len_distritbution)
+        match_len_list = decoding_process(l, encoded_match_len)
+        print("after decoding match_len_list")
+
+        # match_offset_list
+        len_match_offset_distritbution, num_bits_consumed = decoder.decode_symbol(input_bitarray)
+        input_bitarray = input_bitarray[num_bits_consumed : ]
+        encoded_match_offset_distribution = input_bitarray[ : len_match_offset_distritbution]
+        input_bitarray = input_bitarray[len_match_offset_distritbution : ]
+        match_offset_distritbution = decoding_num_distribution(encoded_match_offset_distribution)
+        print("after decoding match_offset_distritbution")
+
+        len_match_offset, num_bits_consumed = decoder.decode_symbol(input_bitarray)
+        input_bitarray = input_bitarray[num_bits_consumed : ]
+        encoded_match_offset = input_bitarray[ : len_match_offset]
+        input_bitarray = input_bitarray[len_match_offset : ]
+        l = formUniformList(match_offset_distritbution)
+        match_offset_list = decoding_process(l, encoded_match_offset)
+        print("after decoding match_offset_list")
+
+        temp = list(zip(pattern_len_list, [x + min_match_len for x in match_len_list], match_offset_list))
+        ptr = 0
+        ret = []
+        for i in range(len(match_len_list)):
+            ret.append([''.join(pattern[ptr : ptr + pattern_len_list[i]]), min_match_len + match_len_list[i], match_offset_list[i]])
+            ptr += pattern_len_list[i]
+        return ret
+
     def decoding(self, binary):
         if self.binary_type == "baseline":
             return self.table_to_block(self.binary_to_table_baseline(binary))
-        return self.table_to_block(self.binary_to_table_optimized(binary))
+        if self.binary_type == "optimized":
+            return self.table_to_block(self.binary_to_table_optimized(binary))
+        return self.table_to_block(self.binary_to_table_fse(binary))
 
 '''
 Form subrange of symbol with frequency x occured in 2^n symbols.
@@ -492,282 +779,14 @@ def normalizeFrequencies(d):
     if sum(d.values()) == n_prime: return d
     # sort d in descending order
     d = dict(sorted(d.items(), key = lambda item: -item[1]))
-    c = n_prime - sum(d.values())
+    times = n_prime - sum(d.values())
     cnt = 0
     for c in d.keys():
-        if cnt <= d[c]:
+        if cnt <= times:
             d[c] += 1
             cnt += 1
-        break
+        else: break
     return d
-
-'''
-l is the list of ints to be encoded
-
-- int : number of pairs to be looked up
-- (int, int) : value and counts
-'''
-def encoding_num_distribution(d):
-    encoder = EliasDeltaUintEncoder()
-    ret = encoder.encode_symbol(len(d))
-    for k, v in d.items():
-        ret += (encoder.encode_symbol(k) + encoder.encode_symbol(v))
-    return ret
-
-def decoding_num_distribution(input_bitarray):
-    decoder = EliasDeltaUintDecoder()
-    num, num_bits_consumed = decoder.decode_symbol(input_bitarray)
-    ret = dict()
-    for i in range(num):
-        k, n = decoder.decode_symbol(input_bitarray[num_bits_consumed : ])
-        v, n1 = decoder.decode_symbol(input_bitarray[num_bits_consumed + n: ])
-        num_bits_consumed += (n + n1)
-        ret[k] = v
-    return ret
-
-'''
-l is the list of bytes to be encoded
-
-- int (256 times): counts of each ascii value
-'''
-def encoding_ascii_distribution(l):
-    encoder = EliasDeltaUintEncoder()
-    d = normalizeFrequencies(dict(Counter(l)))
-    ret = BitArray()
-    for i in range(255):
-        if chr(i) not in d.keys(): ret += encoder.encode_symbol(0)
-        else: ret += encoder.encode_symbol(d[chr(i)])
-    return ret
-
-def decoding_ascii_distribution(input_bitarray):
-    decoder, num_bits_consumed, ret = EliasDeltaUintDecoder(), 0, dict()
-    for i in range(255):
-        c, n = decoder.decode_symbol(input_bitarray[num_bits_consumed : ])
-        num_bits_consumed += n
-        if c != 0: ret[chr(i)] = c
-    return ret
-
-'''
-l is the uniformly distributed table generated
-text is the text to be encoded (might be int or char)
-
-concatenation of:
-- final state
-- offsets following decoding process
-'''
-def encoding_process(l, text):
-    denominator = len(l)
-    counter = Counter(l)
-    ret = BitArray()
-    prev_symbol = text[0]
-    prev_state = l.index(prev_symbol)
-    for curr_symbol in text[1:]:
-        l1, c1, l2, c2 = formSubrange(counter[curr_symbol], denominator)
-        # find subrange lie in
-        # lie in larger subrange
-        if l1 * c1 < prev_state:
-            len_to_write = math.log2(l2)
-            index_subrange = (prev_state - l1 * c1) % l2
-            offset_subrange = uint_to_bitarray(index_subrange, int(len_to_write))
-            ret += offset_subrange
-            # update prev_state
-            cnt = 0
-            for i, s in enumerate(l):
-                if (cnt == (prev_state - c1 * l1) // l2 + c1) and (s == curr_symbol):
-                    prev_state = i
-                    break
-                elif (s == curr_symbol):
-                    cnt += 1
-            prev_symbol = curr_symbol
-        # lie in smaller subrange
-        else:
-            len_to_write = int(math.log2(l1))
-            index_subrange = prev_state % l1
-            if len_to_write == 0: offset_subrange = BitArray('0')
-            else: offset_subrange = uint_to_bitarray(index_subrange, len_to_write)
-            ret += offset_subrange
-            # update prev_state
-            cnt = 0
-            for i, s in enumerate(l):
-                if (cnt == prev_state // l1) and (s == curr_symbol):
-                    prev_state = i
-                    break
-                elif (s == curr_symbol):
-                    cnt += 1
-            prev_symbol = curr_symbol
-    return EliasDeltaUintEncoder().encode_symbol(prev_state) + ret
-
-def decoding_process(l, input_bitarray):
-    last_state, num_bits_consumed = EliasDeltaUintDecoder().decode_symbol(input_bitarray)
-    ret = [l[last_state]]
-    input_bitarray = input_bitarray[num_bits_consumed : ]
-    ptr = len(input_bitarray)
-    last_symbol = ret[0]
-    denominator = len(l)
-    counter = Counter(l)
-    while ptr > 0:
-        l1, c1, l2, c2 = formSubrange(counter[last_symbol], denominator)
-        # find which subrange lie in
-        cnt = 1
-        for c in l[:last_state]:
-            if c == last_symbol: cnt += 1
-        # lie in larger subrange
-        if cnt > c1:
-            len_to_read = int(math.log2(l2))
-            offset = input_bitarray[(ptr - len_to_read) : ptr]
-            ptr -= len_to_read
-            offset = bitarray_to_uint(offset)
-
-            new_state = offset + c1 * l1 + (cnt - c1 - 1) * l2
-            ret.insert(0, l[new_state])
-            last_state = new_state
-            last_symbol = ret[0]
-        # lie in smaller subrange
-        else:
-            len_to_read = int(math.log2(l1))
-            offset = input_bitarray[ptr - len_to_read : ptr]
-            ptr -= max(len_to_read, 1)
-            if len_to_read == 0: offset = 0
-            else: offset = bitarray_to_uint(offset)
-
-            new_state = offset + (cnt - 1) * l1
-            ret.insert(0, l[new_state])
-            last_state = new_state
-            last_symbol = ret[0]
-    return ret
-
-'''
-concatenation of:
-- fse encoded patterns
-    - EliasDelta encoded int: len of encoded distribution
-    - encoded distribution with encoding_ascii_distribution
-    - EliasDelta encoded int: len of fse encoded patterns
-    - fse encoded pattern text with encoding_process
-- fse encoded pattern_len
-    - EliasDelta encoded int: len of encoded distribution
-    - encoded distribution with encoding_num_distribution
-    - EliasDelta encoded int: len of encoded pattern_len
-    - fse encoded pattern_len text with encoding_process
-- EliasDelta encoded int: min_match_len
-- fse encoded match_len list
-    - EliasDelta encoded int: len of encoded distribution
-    - encoded distribution with encoding_num_distribution
-    - EliasDelta encoded int: len of encoded match_len
-    - fse encoded match_len text with encoding_process
-- fse encoded match_offset list
-    - EliasDelta encoded int: len of encoded distribution
-    - encoded distribution with encoding_num_distribution
-    - EliasDelta encoded int: len of encoded match_offset
-    - fse encoded match_offset text with encoding_process
-'''
-def encoding_table(table):
-    encoder = EliasDeltaUintEncoder()
-    # encoding patterns
-    patterns = ''.join([t for t, _, _ in table])
-    d = normalizeFrequencies(dict(Counter(patterns)))
-    encoded_pattern_distribution = encoding_ascii_distribution(d)
-    l = formUniformList(d)
-    encoded_pattern = encoding_process(l, patterns)
-    ret = encoder.encode_symbol(len(encoded_pattern_distribution)) + encoded_pattern_distribution + encoder.encode_symbol(len(encoded_pattern)) + encoded_pattern
-    # pattern_len
-    pattern_list = [len(x) for x, _, _ in table]
-    d = normalizeFrequencies(dict(Counter(pattern_list)))
-    encoded_pattern_len_distribution = encoding_num_distribution(d)
-    l = formUniformList(d)
-    encoded_pattern_len = encoding_process(l, pattern_list)
-    ret += (encoder.encode_symbol(len(encoded_pattern_len_distribution)) + encoded_pattern_len_distribution)
-    ret += (encoder.encode_symbol(len(encoded_pattern_len)) + encoded_pattern_len)
-    # min_match_len
-    min_match_len = min([x for _, x, _ in table])
-    ret += encoder.encode_symbol(min_match_len)
-    # match_len_list
-    match_len_list = [x - min_match_len for _, x, _ in table]
-    d = normalizeFrequencies(dict(Counter(match_len_list)))
-    encoded_match_len_distribution = encoding_num_distribution(d)
-    l = formUniformList(d)
-    encoded_match_len = encoding_process(l, match_len_list)
-    ret += (encoder.encode_symbol(len(encoded_match_len_distribution)) + encoded_match_len_distribution)
-    ret += (encoder.encode_symbol(len(encoded_match_len)) + encoded_match_len)
-    # match_offset_list
-    match_offset_list = [x for _, _, x in table]
-    d = normalizeFrequencies(dict(Counter(match_offset_list)))
-    encoded_match_offset_distribution = encoding_num_distribution(d)
-    l = formUniformList(d)
-    encoded_match_offset = encoding_process(l, match_offset_list)
-    ret += (encoder.encode_symbol(len(encoded_match_offset_distribution)) + encoded_match_offset_distribution)
-    ret += (encoder.encode_symbol(len(encoded_match_offset)) + encoded_match_offset)
-
-    return ret
-
-def decoding_table(input_bitarray):
-    decoder = EliasDeltaUintDecoder()
-    # patterns
-    len_pattern_distritbution, num_bits_consumed = decoder.decode_symbol(input_bitarray)
-    input_bitarray = input_bitarray[num_bits_consumed : ]
-    encoded_pattern_distribution = input_bitarray[ : len_pattern_distritbution]
-    input_bitarray = input_bitarray[len_pattern_distritbution : ]
-    pattern_distritbution = decoding_ascii_distribution(encoded_pattern_distribution)
-
-    len_pattern, num_bits_consumed = decoder.decode_symbol(input_bitarray)
-    input_bitarray = input_bitarray[num_bits_consumed : ]
-    encoded_pattern = input_bitarray[ : len_pattern]
-    input_bitarray = input_bitarray[len_pattern : ]
-    l = formUniformList(pattern_distritbution)
-    pattern = decoding_process(l, encoded_pattern)
-
-    # pattern_len_list
-    len_pattern_len_distritbution, num_bits_consumed = decoder.decode_symbol(input_bitarray)
-    input_bitarray = input_bitarray[num_bits_consumed : ]
-    encoded_pattern_len_distribution = input_bitarray[ : len_pattern_len_distritbution]
-    input_bitarray = input_bitarray[len_pattern_len_distritbution : ]
-    pattern_len_distritbution = decoding_num_distribution(encoded_pattern_len_distribution)
-
-    len_pattern_len, num_bits_consumed = decoder.decode_symbol(input_bitarray)
-    input_bitarray = input_bitarray[num_bits_consumed : ]
-    encoded_pattern_len = input_bitarray[ : len_pattern_len]
-    input_bitarray = input_bitarray[len_pattern_len : ]
-    l = formUniformList(pattern_len_distritbution)
-    pattern_len_list = decoding_process(l, encoded_pattern_len)
-
-    # min_match_len
-    min_match_len, num_bits_consumed = decoder.decode_symbol(input_bitarray)
-    input_bitarray = input_bitarray[num_bits_consumed : ]
-
-    # match_len_list
-    len_match_len_distritbution, num_bits_consumed = decoder.decode_symbol(input_bitarray)
-    input_bitarray = input_bitarray[num_bits_consumed : ]
-    encoded_match_len_distribution = input_bitarray[ : len_match_len_distritbution]
-    input_bitarray = input_bitarray[len_match_len_distritbution : ]
-    match_len_distritbution = decoding_num_distribution(encoded_match_len_distribution)
-
-    len_match_len, num_bits_consumed = decoder.decode_symbol(input_bitarray)
-    input_bitarray = input_bitarray[num_bits_consumed : ]
-    encoded_match_len = input_bitarray[ : len_match_len]
-    input_bitarray = input_bitarray[len_match_len : ]
-    l = formUniformList(match_len_distritbution)
-    match_len_list = decoding_process(l, encoded_match_len)
-
-    # match_offset_list
-    len_match_offset_distritbution, num_bits_consumed = decoder.decode_symbol(input_bitarray)
-    input_bitarray = input_bitarray[num_bits_consumed : ]
-    encoded_match_offset_distribution = input_bitarray[ : len_match_offset_distritbution]
-    input_bitarray = input_bitarray[len_match_offset_distritbution : ]
-    match_offset_distritbution = decoding_num_distribution(encoded_match_offset_distribution)
-
-    len_match_offset, num_bits_consumed = decoder.decode_symbol(input_bitarray)
-    input_bitarray = input_bitarray[num_bits_consumed : ]
-    encoded_match_offset = input_bitarray[ : len_match_offset]
-    input_bitarray = input_bitarray[len_match_offset : ]
-    l = formUniformList(match_offset_distritbution)
-    match_offset_list = decoding_process(l, encoded_match_offset)
-
-    temp = list(zip(pattern_len_list, [x + min_match_len for x in match_len_list], match_offset_list))
-    ptr = 0
-    ret = []
-    for i in range(len(match_len_list)):
-        ret.append([''.join(pattern[ptr : ptr + pattern_len_list[i]]), min_match_len + match_len_list[i], match_offset_list[i]])
-        ptr += pattern_len_list[i]
-    return ret
 
 if __name__ == "__main__":
     # print(formSubrange(5, 16))
@@ -785,10 +804,18 @@ if __name__ == "__main__":
     # print(encoding_process(l, 'BCDA'))
     # print(decoding_process(l, encoding_process(l, 'BCDA')))
     # l = ['a', 'b', 'c', 'c']
-    # print(encoding_process(l, 'abcc'))
+    # print(encoding_process(l, 'abcc'))  abbabbabbcab
     # print(decoding_process(l, encoding_process(l, 'abcc')))
-    print(encoding_table([["abc", 1, 2], ["c", 1,1]]))
-    print(decoding_table(encoding_table([["abc", 1, 2], ["c", 1, 1]])))
+    encoder = LZSSEncoder("shortest", "hashchain", "baseline", "optimal")
+    decoder = LZSSDecoder("baseline")
+    # print(encoder.table_to_binary_fse([['abcc', 1, 4]]))
+    e = encoder.table_to_binary_fse([['AABBBBBBBAABBBCDCDCDEEEEE', 0, 0]])
+    d = decoder.binary_to_table_fse(e)
+    print(d)
+
+    # l = 'AABBBBBBBAABBBCDCDCDEEEEE'
+    # d = normalizeFrequencies(dict(Counter(l)))
+    # print(d)
 
     # def read_as_test_str(path: str):
     #     with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), path)) as f:
@@ -805,21 +832,21 @@ if __name__ == "__main__":
     #     print(decoder.decoding(encoded))
     #     assert s == decoder.decoding(encoded)
     #     print("{} encoded with {} using table type {} and {}/{} has output length: {} and compression rate: {}".format("", binary_type, table_type, find_match_method, greedy_optimal, len(encoded)/8, len(encoded)/8/len(s)))
-    #
+    # #
     # TABLE_TYPE_ARGS = ["shortest"]
     # FIND_MATCH_METHOD_ARGS = ["hashchain"]
-    # BINARY_TYPE_ARGS = ["baseline", "optimized"]
+    # BINARY_TYPE_ARGS = ["baseline", "optimized", "fse"]
     # GREEDY_OPTIMAL = ["optimal"]
     # TEST_PATHS = [
     #                 "../test/sof_cleaned.txt"
     #                 ]
     # TEST_STRS = [
-    #              # "abb"*3 + "cab",
-    #              # "A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3,
-    #              # "A"*2 + "B"*18 + "C"*2 + "D"*2,
-    #              # "A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2,
-    #              # "ABCABC",
-    #              "A" * 100 + "B" * 99 + "ACCC" * 100 + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 100
+    #              "abb"*3 + "cab",
+    #              "A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3,
+    #              "A"*2 + "B"*18 + "C"*2 + "D"*2,
+    #              "A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2,
+    #              "ABCABC",
+    #              # "A" * 100 + "B" * 99 + "ACCC" * 100 + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 100
     #             ]
     # # TEST_STRS.extend([read_as_test_str(path) for path in TEST_PATHS])
     # # print(len(TEST_STRS[0]))
