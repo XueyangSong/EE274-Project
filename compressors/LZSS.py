@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 SIZE_BYTE = 32
-MAX_WINDOW_SIZE = 1024 * 20
+MAX_WINDOW_SIZE = 1024 * 10
 HASH_NUM_BYTES = 10
 NUM_HASH_TO_SEARCH = 16
 MAX_MATCH_SIZE = 1024
@@ -44,7 +44,7 @@ class LZSSEncoder(DataEncoder):
     binary_type: "baseline" -- Using baseline compression algorithm to convert the table to binary
                  "optimized" -- Using optimized algorithm to convert table to binary
     """
-    def __init__(self, table_type, find_match_method, binary_type, greedy_optimal, window_size=MAX_WINDOW_SIZE):
+    def __init__(self, table_type, find_match_method, binary_type, greedy_optimal, window_size=MAX_WINDOW_SIZE, hash_num_bytes=HASH_NUM_BYTES):
         assert window_size > 0, f"window size is {window_size}, should be larger than 0."
         self.window_size = window_size
         self.window_mask = self.window_size - 1
@@ -55,6 +55,7 @@ class LZSSEncoder(DataEncoder):
         if self.find_match_method == "hashchain":
             self.hash_table = dict() # key -> closest index of same key
             self.chained_prev = [0] * self.window_size # storing the last index of same key
+            self.hash_num_bytes = hash_num_bytes
             # self.hash_collision_check = defaultdict(set)
 
     """
@@ -258,7 +259,7 @@ class LZSSEncoder(DataEncoder):
         match_count = 0
         max_match_length = 0
         lengths, offsets = [], []
-        prefix_to_hash = s[match_idx : match_idx + HASH_NUM_BYTES]
+        prefix_to_hash = s[match_idx : match_idx + self.hash_num_bytes]
         # hash_key = hashlib.sha256(bytes(prefix_to_hash, 'utf-8'))
         # print(hash_key)
         hash_key = hash(prefix_to_hash)
@@ -306,8 +307,8 @@ class LZSSEncoder(DataEncoder):
         length: int
     """
     def match_length(self, s, search_idx, match_idx) -> (int):
-        cur_search, cur_match = search_idx + HASH_NUM_BYTES, match_idx + HASH_NUM_BYTES
-        length = HASH_NUM_BYTES
+        cur_search, cur_match = search_idx + self.hash_num_bytes, match_idx + self.hash_num_bytes
+        length = self.hash_num_bytes
         while cur_search < len(s) and cur_match < len(s) and s[cur_search] == s[cur_match]:
             length += 1
             cur_search += 1
@@ -784,52 +785,34 @@ def normalizeFrequencies(d):
     return d
 
 #=============================== Functions for Testing/Evaluation =====================================
-def read_as_test_str(path: str):
+def read_as_test_str(file_name: str):
+    path = "../test/{}".format(file_name)
     with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), path)) as f:
         contents = f.read()
     return contents
 
-def enc_dec_equality(s: str, table_type: str, find_match_method: str, binary_type: str, greedy_optimal: str, window_size: int):
-    encoder = LZSSEncoder(table_type, find_match_method, binary_type, greedy_optimal, window_size)
+def enc_dec_equality(file_name: str, s: str, table_type: str, find_match_method: str, binary_type: str, greedy_optimal: str, window_size: int, hash_num_bytes=HASH_NUM_BYTES):
+    encoder = LZSSEncoder(table_type, find_match_method, binary_type, greedy_optimal, window_size, hash_num_bytes)
     decoder = LZSSDecoder(binary_type)
     encoded = encoder.encoding(DataBlock(s))
     # print(decoder.decoding(encoded))
     assert s == decoder.decoding(encoded)
     print("{} encoded with {} using table type {} and {}/{} has output length: {} and compression rate: {}".format("", binary_type, table_type, find_match_method, greedy_optimal, len(encoded)/8, len(encoded)/8/len(s)))
-    return len(encoded)/8/len(s)
+    return file_name, find_match_method, greedy_optimal, binary_type, hash_num_bytes, len(encoded)/8/len(s)
 
 def eval_as_df(test_files_w_window, table_type_args, binary_type_args, greedy_optimal_args, find_match_method_args, output_path):
-    #binary types
     l = []
-    for bin_type in binary_type_args:
-        l.extend([bin_type] * len(greedy_optimal_args) * len(find_match_method_args))
-    A = np.array(l)
-
-    # find match methods
-    l = []
-    for method in find_match_method_args:
-        l.extend([method] * len(greedy_optimal_args))
-    l = l * len(binary_type_args)
-    B = np.array(l)
-
-    # greedy or optimal
-    l = greedy_optimal_args * len(find_match_method_args * len(binary_type_args))
-    C = np.array(l)
-
-    # column
-    l = []
-    for path, window_size in list(test_files_w_window.items()):
-        s = read_as_test_str(path)
-        to_append = []
+    for file_name, window_size in list(test_files_w_window.items()):
+        s = read_as_test_str(file_name)
         for table_type in table_type_args:
             for find_match_method in find_match_method_args:
                 for greedy_optimal in greedy_optimal_args:
                     for binary_type in binary_type_args:
-                        # print(greedy_optimal)
-                        to_append.append(enc_dec_equality(s, table_type, find_match_method, binary_type, greedy_optimal, window_size))
-        l.append(to_append)
+                        result = list(enc_dec_equality(file_name, s, table_type, find_match_method, binary_type, greedy_optimal, window_size))
+                        del result[-2]
+                        l.append(result)
     D = np.array(l)
-    df = pd.DataFrame(data=D, columns=pd.MultiIndex.from_tuples(zip(A,B,C)))
+    df = pd.DataFrame(data=D, columns=["File Name", "Matching", "Parsing", "Encoding", "Compression Rate"])
     print(df)
 
     abs_output_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), output_path)
@@ -837,8 +820,25 @@ def eval_as_df(test_files_w_window, table_type_args, binary_type_args, greedy_op
     print("Finished writing to output path: {}".format(abs_output_path))
     return df
 
-# def write_df_to_file(df, output_path):
-#     with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), output_path)) as f:
+# def compare_hash_num_bytes(test_files_w_window: dict, greedy_optimal_args, binary_type_args, output_path):
+#     l = []
+#     hash_num_bytes_list = range(10, 12)
+#     for file_name, window_size in list(test_files_w_window.items()):
+#         s = read_as_test_str(file_name)
+#         for greedy_optimal in greedy_optimal_args:
+#             for binary_type in binary_type_args:
+#                 for hash_num_bytes in hash_num_bytes_list:
+#                     print(hash_num_bytes)
+#                     l.append(enc_dec_equality(file_name, s, "shortest", "hashchain", binary_type, greedy_optimal, 100000, hash_num_bytes))
+#     D = np.array(l)
+#     df = pd.DataFrame(data=D, columns=["File Name", "Matching", "Parsing", "Encoding", "Hash Prefix Length", "Compression Rate"])
+#     print(df)
+
+#     abs_output_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), output_path)
+#     df.to_csv(abs_output_path)
+#     print("Finished writing to output path: {}".format(abs_output_path))
+#     return df
+
 
 #=============================== Functions for Testing/Evaluation =====================================
 
@@ -856,12 +856,12 @@ if __name__ == "__main__":
                         "fse"
                         ]
     GREEDY_OPTIMAL_ARGS = [
-                        "greedy",
+                        # "greedy",
                         "optimal"
                         ]
     TEST_PATHS = [
-                    "../test/sof_cleaned.txt",
-                    "../test/crooked_cleaned.txt"
+                    "Sign of Four.txt",
+                    # "Crooked Man.txt"
                     ]
     TEST_STRS = [
     #              "abb"*3 + "cab",
@@ -873,12 +873,15 @@ if __name__ == "__main__":
                 ]
     TEST_STRS.extend([read_as_test_str(path) for path in TEST_PATHS])
     TEST_FILES_W_WINDOW = {
-        "../test/sof_cleaned.txt": 1024 * 20,
-        "../test/crooked_cleaned.txt": 1024 * 10
+        "Sign of Four.txt": 1024 * 20,
+        # "Crooked Man.txt": 1024 * 10
     }
     
     output_path = "../test/result/sof_crooked_results.csv"
     eval_as_df(TEST_FILES_W_WINDOW, TABLE_TYPE_ARGS, BINARY_TYPE_ARGS, GREEDY_OPTIMAL_ARGS, FIND_MATCH_METHOD_ARGS, output_path)
+
+    # output_path = "../test/result/sof_crooked_variable_hash.csv"    
+    # compare_hash_num_bytes(TEST_FILES_W_WINDOW, GREEDY_OPTIMAL_ARGS, BINARY_TYPE_ARGS, output_path)
 
     # for s in TEST_STRS:
     #     for table_type in TABLE_TYPE_ARGS:
