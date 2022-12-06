@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 SIZE_BYTE = 32
-MAX_WINDOW_SIZE = 1024
+MAX_WINDOW_SIZE = 1024 * 20
 HASH_NUM_BYTES = 10
 NUM_HASH_TO_SEARCH = 16
 MAX_MATCH_SIZE = 1024
@@ -72,6 +72,9 @@ class LZSSEncoder(DataEncoder):
         elif self.greedy_optimal == "optimal":
             table = self.optimal_parsing(''.join(data_block.data_list))
         # print(table)
+        # print(self.greedy_optimal)
+        # print(self.binary_type)
+        # print(self.find_match_method)
         return table
 
     """
@@ -266,6 +269,7 @@ class LZSSEncoder(DataEncoder):
         # If current `hash_key` doesn't exist in `hash_table`, no same prefix has been seen
         if hash_key not in self.hash_table.keys():
             self.chained_prev[match_idx & self.window_mask] = -1
+            # self.chained_prev[match_idx] = -1
             self.hash_table[hash_key] = match_idx
         else:
             # print("here")
@@ -286,7 +290,9 @@ class LZSSEncoder(DataEncoder):
                         match_count += 1
                 num_hash_searched += 1
                 cur_search_idx = self.chained_prev[cur_search_idx & self.window_mask]
+                # cur_search_idx = self.chained_prev[cur_search_idx]
             self.chained_prev[match_idx & self.window_mask] = self.hash_table[hash_key]
+            # self.chained_prev[match_idx] = self.hash_table[hash_key]
             self.hash_table[hash_key] = match_idx
         return match_count, lengths, offsets
 
@@ -777,41 +783,102 @@ def normalizeFrequencies(d):
         else: break
     return d
 
+#=============================== Functions for Testing/Evaluation =====================================
+def read_as_test_str(path: str):
+    with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), path)) as f:
+        contents = f.read()
+    return contents
+
+def enc_dec_equality(s: str, table_type: str, find_match_method: str, binary_type: str, greedy_optimal: str, window_size: int):
+    encoder = LZSSEncoder(table_type, find_match_method, binary_type, greedy_optimal, window_size)
+    decoder = LZSSDecoder(binary_type)
+    encoded = encoder.encoding(DataBlock(s))
+    # print(decoder.decoding(encoded))
+    assert s == decoder.decoding(encoded)
+    print("{} encoded with {} using table type {} and {}/{} has output length: {} and compression rate: {}".format("", binary_type, table_type, find_match_method, greedy_optimal, len(encoded)/8, len(encoded)/8/len(s)))
+    return len(encoded)/8/len(s)
+
+def eval_as_df(test_files_w_window, table_type_args, binary_type_args, greedy_optimal_args, find_match_method_args, output_path):
+    #binary types
+    l = []
+    for bin_type in binary_type_args:
+        l.extend([bin_type] * len(greedy_optimal_args) * len(find_match_method_args))
+    A = np.array(l)
+
+    # find match methods
+    l = []
+    for method in find_match_method_args:
+        l.extend([method] * len(greedy_optimal_args))
+    l = l * len(binary_type_args)
+    B = np.array(l)
+
+    # greedy or optimal
+    l = greedy_optimal_args * len(find_match_method_args * len(binary_type_args))
+    C = np.array(l)
+
+    # column
+    l = []
+    for path, window_size in list(test_files_w_window.items()):
+        s = read_as_test_str(path)
+        to_append = []
+        for table_type in table_type_args:
+            for find_match_method in find_match_method_args:
+                for greedy_optimal in greedy_optimal_args:
+                    for binary_type in binary_type_args:
+                        # print(greedy_optimal)
+                        to_append.append(enc_dec_equality(s, table_type, find_match_method, binary_type, greedy_optimal, window_size))
+        l.append(to_append)
+    D = np.array(l)
+    df = pd.DataFrame(data=D, columns=pd.MultiIndex.from_tuples(zip(A,B,C)))
+    print(df)
+
+    abs_output_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), output_path)
+    df.to_csv(abs_output_path)
+    print("Finished writing to output path: {}".format(abs_output_path))
+    return df
+
+# def write_df_to_file(df, output_path):
+#     with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), output_path)) as f:
+
+#=============================== Functions for Testing/Evaluation =====================================
+
+
 if __name__ == "__main__":
-    # def read_as_test_str(path: str):
-    #     with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), path)) as f:
-    #         contents = f.read()
-    #     return contents
-    #
-    def enc_dec_equality(s: str, table_type: str, find_match_method: str, binary_type: str, greedy_optimal: str):
-        encoder = LZSSEncoder(table_type, find_match_method, binary_type, greedy_optimal)
-        decoder = LZSSDecoder(binary_type)
-        encoded = encoder.encoding(DataBlock(s))
-        # print(encoder.hash_collision_check)
-        # output_list = [li for li in difflib.ndiff(s, decoder.decoding(encoded)) if li[0] != ' ']
-        # print(output_list)
-        print(decoder.decoding(encoded))
-        assert s == decoder.decoding(encoded)
-        print("{} encoded with {} using table type {} and {}/{} has output length: {} and compression rate: {}".format("", binary_type, table_type, find_match_method, greedy_optimal, len(encoded)/8, len(encoded)/8/len(s)))
-        return len(encoded)/8/len(s)
     #
     TABLE_TYPE_ARGS = ["shortest"]
-    FIND_MATCH_METHOD_ARGS = ["hashchain"]
-    BINARY_TYPE_ARGS = ["baseline", "optimized", "fse"]
-    GREEDY_OPTIMAL = ["optimal"]
+    FIND_MATCH_METHOD_ARGS = [
+                                "basic", 
+                                "hashchain"
+                            ]
+    BINARY_TYPE_ARGS = [
+                        "baseline", 
+                        "optimized", 
+                        "fse"
+                        ]
+    GREEDY_OPTIMAL_ARGS = [
+                        "greedy",
+                        "optimal"
+                        ]
     TEST_PATHS = [
-                    "../test/sof_cleaned.txt"
+                    "../test/sof_cleaned.txt",
+                    "../test/crooked_cleaned.txt"
                     ]
     TEST_STRS = [
-                 "abb"*3 + "cab",
-                 "A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3,
-                 "A"*2 + "B"*18 + "C"*2 + "D"*2,
-                 "A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2,
-                 "ABCABC",
-                 # "A" * 100 + "B" * 99 + "ACCC" * 100 + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 100
+    #              "abb"*3 + "cab",
+    #              "A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3,
+    #              "A"*2 + "B"*18 + "C"*2 + "D"*2,
+    #              "A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2,
+    #              "ABCABC",
+    #              "A" * 100 + "B" * 99 + "ACCC" * 100 + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 100
                 ]
-    # TEST_STRS.extend([read_as_test_str(path) for path in TEST_PATHS])
-    # print(len(TEST_STRS[0]))
+    TEST_STRS.extend([read_as_test_str(path) for path in TEST_PATHS])
+    TEST_FILES_W_WINDOW = {
+        "../test/sof_cleaned.txt": 1024 * 20,
+        "../test/crooked_cleaned.txt": 1024 * 10
+    }
+    
+    output_path = "../test/result/sof_crooked_results.csv"
+    eval_as_df(TEST_FILES_W_WINDOW, TABLE_TYPE_ARGS, BINARY_TYPE_ARGS, GREEDY_OPTIMAL_ARGS, FIND_MATCH_METHOD_ARGS, output_path)
 
     # for s in TEST_STRS:
     #     for table_type in TABLE_TYPE_ARGS:
@@ -819,42 +886,5 @@ if __name__ == "__main__":
     #             for binary_type in BINARY_TYPE_ARGS:
     #                 for greedy_optimal in GREEDY_OPTIMAL:
     #                     enc_dec_equality(s, table_type, find_match_method, binary_type, greedy_optimal)
-    #
+    
 
-    # binary types
-    l = []
-    for bin_type in BINARY_TYPE_ARGS:
-        l.extend([bin_type] * len(GREEDY_OPTIMAL) * len(FIND_MATCH_METHOD_ARGS))
-    A = np.array(l)
-    # print(A)
-
-    # find match methods
-    l = []
-    for method in FIND_MATCH_METHOD_ARGS:
-        l.extend([method] * len(GREEDY_OPTIMAL))
-    l = l * len(BINARY_TYPE_ARGS)
-    B = np.array(l)
-    # print(B)
-
-    # greedy or optimal
-    l = GREEDY_OPTIMAL * len(FIND_MATCH_METHOD_ARGS * len(BINARY_TYPE_ARGS))
-    C = np.array(l)
-    # print(C)
-
-    # column
-    l = []
-    for s in TEST_STRS:
-        to_append = []
-        for table_type in TABLE_TYPE_ARGS:
-            for find_match_method in FIND_MATCH_METHOD_ARGS:
-                for greedy_optimal in GREEDY_OPTIMAL:
-                    for binary_type in BINARY_TYPE_ARGS:
-                        # to_append.append(1)
-                        to_append.append(enc_dec_equality(s, table_type, find_match_method, binary_type, greedy_optimal))
-        l.append(to_append)
-    D = np.array(l)
-    print()
-    print()
-    print()
-    df = pd.DataFrame(data=D, columns=pd.MultiIndex.from_tuples(zip(A,B,C)))
-    print(df)
