@@ -22,23 +22,26 @@ Here is a list of algorithms implemented.
     ```
     export PYTHONPATH=$PYTHONPATH:<path_to_repo>
     ```
+
+## Running the codes
 - Run unit test codes:
     ```
     python3 compressors/LZSS.py
-    ```
-
-## Using the codes
-- Run evaluation:
-    ```
-    TODO
     ```
 - Compress file:
     ```
     python3 compressors/LZSS.py TODO
     ```
 
+## Evaluation
+- Codes used for evaluation:
+[eval_results-checkpoint.ipynb](test/.ipynb_checkpoints)
+- Evaluation results:
+[result](test/result)
+
 ## Report and Presentation links
 [Report](https://google.com)
+
 [Presentation Slides](https://docs.google.com/presentation/d/1IvNpNxeBvL9jRCT4w7LkT2Osie4XTMWMNh6xIjWzPNQ/edit?usp=sharing) (Need Stanford account access)
 
 ## Contact
