@@ -1,0 +1,9 @@
+,File Name,Matching,Parsing,Encoding,Compression Rate
+0,Sign of Four.txt,hashchain,greedy,baseline,1.8952835269677617
+1,Sign of Four.txt,hashchain,greedy,optimized,0.5830287758713549
+2,Sign of Four.txt,hashchain,optimal,baseline,1.8649688389628376
+3,Sign of Four.txt,hashchain,optimal,optimized,0.551790797876433
+4,Crooked Man.txt,hashchain,greedy,baseline,1.9891805835336929
+5,Crooked Man.txt,hashchain,greedy,optimized,0.5713374813178245
+6,Crooked Man.txt,hashchain,optimal,baseline,1.8959321593345897
+7,Crooked Man.txt,hashchain,optimal,optimized,0.5260616349340438
