@@ -826,7 +826,7 @@ class LZSSDecoder(DataDecoder):
             )
             ptr += pattern_len_list[i]
 
-        ret += pattern[ptr:]
+        if len(pattern[ptr:]) != 0 : ret.append(["".join(pattern[ptr:]), 0, 0])
         return ret
 
     def decoding(self, binary):
@@ -1070,7 +1070,7 @@ if __name__ == "__main__":
         "A" * 2 + "B" * 18 + "C" * 2 + "D" * 2,
         "A" * 2 + "B" * 18 + "AAB" + "C" * 2 + "D" * 2,
         "ABCABC",
-        "A" * 100 + "B" * 99 + "ACCC" * 100 + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 100,
+        # "A" * 100 + "B" * 99 + "ACCC" * 100 + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 100,
     ]
     LARGE_TEST_FILES_W_WINDOW = {
         "Sign of Four.txt": MAX_WINDOW_SIZE,
