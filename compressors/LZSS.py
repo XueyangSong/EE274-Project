@@ -547,8 +547,7 @@ class LZSSEncoder(DataEncoder):
             + encoded_pattern_len_distribution
         )
         ret += encoder.encode_symbol(len(encoded_pattern_len)) + encoded_pattern_len
-        if (table[-1][1] == 0) and (table[-1][2] == 0):
-            table = table[:-1]
+        if (table[-1][1] == 0) and (table[-1][2] == 0): table = table[:-1]
         # min_match_len
         min_match_len = min([x for _, x, _ in table])
         ret += encoder.encode_symbol(min_match_len)
@@ -986,7 +985,7 @@ if __name__ == "__main__":
                      "A"*2 + "B"*18 + "C"*2 + "D"*2,
                      "A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2,
                      "ABCABC",
-                     # "A" * 100 + "B" * 99 + "ACCC" * 100 + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 100
+                     "A" * 100 + "B" * 99 + "ACCC" * 100 + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 100
                     ]
     LARGE_TEST_FILES_W_WINDOW = {
         "Sign of Four.txt": MAX_WINDOW_SIZE,
@@ -1010,27 +1009,21 @@ if __name__ == "__main__":
                         "optimal"
                         ]
 
-    for s in UNIT_TESTS:
-        encoder = LZSSEncoder("shortest", "basic", "fse", "greedy", MAX_WINDOW_SIZE, HASH_NUM_BYTES, NUM_HASH_TO_SEARCH)
-        decoder = LZSSDecoder("fse")
-        encoded = encoder.encoding(DataBlock(s))
-        assert s == decoder.decoding(encoded)
+    # Algorithm combination comparisons
+    output_path = "../test/result/algorithms_comparisons_long.csv"
+    eval_as_df(
+        LARGE_TEST_FILES_W_WINDOW,
+        TABLE_TYPE_ARGS,
+        BINARY_TYPE_ARGS,
+        GREEDY_OPTIMAL_ARGS,
+        FIND_MATCH_METHOD_ARGS,
+        output_path,
+    )
 
-    # # Algorithm combination comparisons
-    # output_path = "../test/result/algorithms_comparisons_long.csv"
-    # eval_as_df(
-    #     LARGE_TEST_FILES_W_WINDOW,
-    #     TABLE_TYPE_ARGS,
-    #     BINARY_TYPE_ARGS,
-    #     GREEDY_OPTIMAL_ARGS,
-    #     FIND_MATCH_METHOD_ARGS,
-    #     output_path,
-    # )
-    #
-    # # Legnth of hash prefix tuning
-    # output_path = "../test/result/prefix_length_tuning_crooked.csv"
-    # # tune_hash_num_bytes(LARGE_TEST_FILES_W_WINDOW, GREEDY_OPTIMAL_ARGS, BINARY_TYPE_ARGS, output_path)
-    #
-    # # Number of prefix searches tuning
-    # output_path = "../test/result/prefix_search_range_tuning_sof.csv"
-    # # tune_hash_search_range(LARGE_TEST_FILES_W_WINDOW, GREEDY_OPTIMAL_ARGS, BINARY_TYPE_ARGS, output_path)
+    # Legnth of hash prefix tuning
+    output_path = "../test/result/prefix_length_tuning_crooked.csv"
+    # tune_hash_num_bytes(LARGE_TEST_FILES_W_WINDOW, GREEDY_OPTIMAL_ARGS, BINARY_TYPE_ARGS, output_path)
+
+    # Number of prefix searches tuning
+    output_path = "../test/result/prefix_search_range_tuning_sof.csv"
+    # tune_hash_search_range(LARGE_TEST_FILES_W_WINDOW, GREEDY_OPTIMAL_ARGS, BINARY_TYPE_ARGS, output_path)
