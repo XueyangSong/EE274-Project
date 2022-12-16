@@ -17,6 +17,7 @@ MAX_WINDOW_SIZE = 1024 * 100
 HASH_NUM_BYTES = 7
 NUM_HASH_TO_SEARCH = 16
 
+
 class LZSSEncoder(DataEncoder):
     """
     window_size: int -- how far we allow the compressor to look backwards to find matches
@@ -31,6 +32,7 @@ class LZSSEncoder(DataEncoder):
     binary_type: "baseline" -- Using baseline compression algorithm to convert the table to binary
                  "optimized" -- Using optimized algorithm to convert table to binary
     """
+
     def __init__(
         self,
         table_type,
@@ -39,7 +41,7 @@ class LZSSEncoder(DataEncoder):
         greedy_optimal,
         window_size=MAX_WINDOW_SIZE,
         hash_num_bytes=HASH_NUM_BYTES,
-        num_hash_to_search=HASH_NUM_BYTES
+        num_hash_to_search=HASH_NUM_BYTES,
     ):
         # assert window_size > 0, f"window size is {window_size}, should be larger than 0."
         # self.window_size = window_size
@@ -49,8 +51,8 @@ class LZSSEncoder(DataEncoder):
         self.find_match_method = find_match_method
         self.greedy_optimal = greedy_optimal
         if self.find_match_method == "hashchain":
-            self.hash_table = dict() # key -> closest index of same key
-            self.chained_prev = [0] * MAX_WINDOW_SIZE # storing the last index of same key
+            self.hash_table = dict()  # key -> closest index of same key
+            self.chained_prev = [0] * MAX_WINDOW_SIZE  # storing the last index of same key
             self.hash_num_bytes = hash_num_bytes
             self.num_hash_to_search = num_hash_to_search
 
@@ -547,7 +549,8 @@ class LZSSEncoder(DataEncoder):
             + encoded_pattern_len_distribution
         )
         ret += encoder.encode_symbol(len(encoded_pattern_len)) + encoded_pattern_len
-        if (table[-1][1] == 0) and (table[-1][2] == 0): table = table[:-1]
+        if (table[-1][1] == 0) and (table[-1][2] == 0):
+            table = table[:-1]
         # min_match_len
         min_match_len = min([x for _, x, _ in table])
         ret += encoder.encode_symbol(min_match_len)
@@ -823,7 +826,7 @@ class LZSSDecoder(DataDecoder):
             )
             ptr += pattern_len_list[i]
 
-        ret += pattern[ptr : ]
+        ret += pattern[ptr:]
         return ret
 
     def decoding(self, binary):
@@ -882,12 +885,14 @@ def normalizeFrequencies(d):
             break
     return d
 
-#=============================== Functions for Testing/Evaluation =====================================
+
+# =============================== Functions for Testing/Evaluation =====================================
 def read_as_test_str(file_name: str):
     path = "../test/{}".format(file_name)
     with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), path)) as f:
         contents = f.read()
     return contents
+
 
 def enc_dec_equality(
     file_name: str,
@@ -898,14 +903,31 @@ def enc_dec_equality(
     greedy_optimal: str,
     window_size: int,
     hash_num_bytes=HASH_NUM_BYTES,
-    num_hash_to_search=NUM_HASH_TO_SEARCH
+    num_hash_to_search=NUM_HASH_TO_SEARCH,
 ):
-    encoder = LZSSEncoder(table_type, find_match_method, binary_type, greedy_optimal, window_size, hash_num_bytes, num_hash_to_search)
+    encoder = LZSSEncoder(
+        table_type,
+        find_match_method,
+        binary_type,
+        greedy_optimal,
+        window_size,
+        hash_num_bytes,
+        num_hash_to_search,
+    )
     decoder = LZSSDecoder(binary_type)
     encoded = encoder.encoding(DataBlock(s))
     assert s == decoder.decoding(encoded)
     # print("{} encoded with {} using table type {} and {}/{} has output length: {} and compression rate: {}".format("", binary_type, table_type, find_match_method, greedy_optimal, len(encoded)/8, len(encoded)/8/len(s)))
-    return file_name, find_match_method, greedy_optimal, binary_type, hash_num_bytes, num_hash_to_search, len(encoded)/8/len(s)
+    return (
+        file_name,
+        find_match_method,
+        greedy_optimal,
+        binary_type,
+        hash_num_bytes,
+        num_hash_to_search,
+        len(encoded) / 8 / len(s),
+    )
+
 
 def eval_as_df(
     test_files_w_window,
@@ -922,12 +944,24 @@ def eval_as_df(
             for find_match_method in find_match_method_args:
                 for greedy_optimal in greedy_optimal_args:
                     for binary_type in binary_type_args:
-                        result = list(enc_dec_equality(file_name, s, table_type, find_match_method, binary_type, greedy_optimal, window_size))
+                        result = list(
+                            enc_dec_equality(
+                                file_name,
+                                s,
+                                table_type,
+                                find_match_method,
+                                binary_type,
+                                greedy_optimal,
+                                window_size,
+                            )
+                        )
                         del result[-2]
                         del result[-2]
                         l.append(result)
     D = np.array(l)
-    df = pd.DataFrame(data=D, columns=["File Name", "Matching", "Parsing", "Encoding", "Compression Rate"])
+    df = pd.DataFrame(
+        data=D, columns=["File Name", "Matching", "Parsing", "Encoding", "Compression Rate"]
+    )
     print(df)
 
     abs_output_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), output_path)
@@ -935,7 +969,10 @@ def eval_as_df(
     print("Finished writing to output path: {}".format(abs_output_path))
     return df
 
-def tune_hash_num_bytes(test_files_w_window: dict, greedy_optimal_args, binary_type_args, output_path):
+
+def tune_hash_num_bytes(
+    test_files_w_window: dict, greedy_optimal_args, binary_type_args, output_path
+):
     l = []
     hash_num_bytes_list = range(3, 10)
     for file_name, window_size in list(test_files_w_window.items()):
@@ -943,11 +980,32 @@ def tune_hash_num_bytes(test_files_w_window: dict, greedy_optimal_args, binary_t
         for greedy_optimal in greedy_optimal_args:
             for binary_type in binary_type_args:
                 for hash_num_bytes in hash_num_bytes_list:
-                    result = list(enc_dec_equality(file_name, s, "shortest", "hashchain", binary_type, greedy_optimal, window_size, hash_num_bytes))
+                    result = list(
+                        enc_dec_equality(
+                            file_name,
+                            s,
+                            "shortest",
+                            "hashchain",
+                            binary_type,
+                            greedy_optimal,
+                            window_size,
+                            hash_num_bytes,
+                        )
+                    )
                     del result[-2]
                     l.append(result)
     D = np.array(l)
-    df = pd.DataFrame(data=D, columns=["File Name", "Matching", "Parsing", "Encoding", "Hash Prefix Length", "Compression Rate"])
+    df = pd.DataFrame(
+        data=D,
+        columns=[
+            "File Name",
+            "Matching",
+            "Parsing",
+            "Encoding",
+            "Hash Prefix Length",
+            "Compression Rate",
+        ],
+    )
     print(df)
 
     abs_output_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), output_path)
@@ -955,7 +1013,10 @@ def tune_hash_num_bytes(test_files_w_window: dict, greedy_optimal_args, binary_t
     print("Finished writing to output path: {}".format(abs_output_path))
     return df
 
-def tune_hash_search_range(test_files_w_window: dict, greedy_optimal_args, binary_type_args, output_path):
+
+def tune_hash_search_range(
+    test_files_w_window: dict, greedy_optimal_args, binary_type_args, output_path
+):
     l = []
     hash_num_bytes_list = range(4, 8)
     num_hash_to_search_list = [8, 16, 32]
@@ -965,9 +1026,32 @@ def tune_hash_search_range(test_files_w_window: dict, greedy_optimal_args, binar
             for binary_type in binary_type_args:
                 for hash_num_bytes in hash_num_bytes_list:
                     for num_hash_to_search in num_hash_to_search_list:
-                        l.append(enc_dec_equality(file_name, s, "shortest", "hashchain", binary_type, greedy_optimal, window_size, hash_num_bytes, num_hash_to_search))
+                        l.append(
+                            enc_dec_equality(
+                                file_name,
+                                s,
+                                "shortest",
+                                "hashchain",
+                                binary_type,
+                                greedy_optimal,
+                                window_size,
+                                hash_num_bytes,
+                                num_hash_to_search,
+                            )
+                        )
     D = np.array(l)
-    df = pd.DataFrame(data=D, columns=["File Name", "Matching", "Parsing", "Encoding", "Hash Prefix Length", "Prefix Search Range", "Compression Rate"])
+    df = pd.DataFrame(
+        data=D,
+        columns=[
+            "File Name",
+            "Matching",
+            "Parsing",
+            "Encoding",
+            "Hash Prefix Length",
+            "Prefix Search Range",
+            "Compression Rate",
+        ],
+    )
     print(df)
 
     abs_output_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), output_path)
@@ -975,18 +1059,19 @@ def tune_hash_search_range(test_files_w_window: dict, greedy_optimal_args, binar
     print("Finished writing to output path: {}".format(abs_output_path))
     return df
 
+
 # =============================== Functions for Testing/Evaluation =====================================
 
 
 if __name__ == "__main__":
     UNIT_TESTS = [
-                     "abb"*3 + "cab",
-                     "A"*2 + "B"*7 + "A"*2 + "B"*3 + "CD"*3,
-                     "A"*2 + "B"*18 + "C"*2 + "D"*2,
-                     "A"*2 + "B"*18 + "AAB" + "C"*2 + "D"*2,
-                     "ABCABC",
-                     "A" * 100 + "B" * 99 + "ACCC" * 100 + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 100
-                    ]
+        "abb" * 3 + "cab",
+        "A" * 2 + "B" * 7 + "A" * 2 + "B" * 3 + "CD" * 3,
+        "A" * 2 + "B" * 18 + "C" * 2 + "D" * 2,
+        "A" * 2 + "B" * 18 + "AAB" + "C" * 2 + "D" * 2,
+        "ABCABC",
+        "A" * 100 + "B" * 99 + "ACCC" * 100 + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 100,
+    ]
     LARGE_TEST_FILES_W_WINDOW = {
         "Sign of Four.txt": MAX_WINDOW_SIZE,
         "Crooked Man.txt": MAX_WINDOW_SIZE,
@@ -995,19 +1080,9 @@ if __name__ == "__main__":
     }
 
     TABLE_TYPE_ARGS = ["shortest"]
-    FIND_MATCH_METHOD_ARGS = [
-                                "basic",
-                                "hashchain"
-                            ]
-    BINARY_TYPE_ARGS = [
-                        "baseline",
-                        "optimized",
-                        "fse"
-                        ]
-    GREEDY_OPTIMAL_ARGS = [
-                        "greedy",
-                        "optimal"
-                        ]
+    FIND_MATCH_METHOD_ARGS = ["basic", "hashchain"]
+    BINARY_TYPE_ARGS = ["baseline", "optimized", "fse"]
+    GREEDY_OPTIMAL_ARGS = ["greedy", "optimal"]
 
     # Algorithm combination comparisons
     output_path = "../test/result/algorithms_comparisons_long.csv"
