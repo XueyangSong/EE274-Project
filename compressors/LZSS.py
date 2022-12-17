@@ -530,7 +530,7 @@ class LZSSEncoder(DataEncoder):
         patterns = "".join([t for t, _, _ in table])
         d = normalizeFrequencies(dict(Counter(patterns)))
         encoded_pattern_distribution = encoding_ascii_distribution(d)
-        # print("in encoding, the pattern is:", d)
+        
         l = formUniformList(d)
         encoded_pattern = encoding_process(l, patterns)
         ret = (
@@ -1095,10 +1095,9 @@ if __name__ == "__main__":
             print("Invalid. Need input and output files!")
             quit()
         if args.binary_type != None: binary_type = args.binary_type
-        with open(args.input, 'rb') as file:
-            fileContent = file.read()
         s = BitArray()
-        s.frombytes(fileContent)
+        with open(args.input, 'rb') as fh:
+                s.fromfile(fh)
         s = s[:-2]
         decoded = LZSSDecoder(binary_type).decoding(s)
         f = open(args.output, "a")
@@ -1124,9 +1123,8 @@ if __name__ == "__main__":
             num_hash_to_search,
         )
         encoded = encoder.encoding(DataBlock(s))
-        f = open(args.output, "ab")
-        f.write(encoded)
-        f.close()
+        with open(args.output, 'wb') as fh:
+            encoded.tofile(fh)
     else:
         UNIT_TESTS = [
             "abb" * 3 + "cab",
