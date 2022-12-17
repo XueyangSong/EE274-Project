@@ -38,6 +38,7 @@ The default table_type is "shortest". Default find_match_method is "hashchain". 
     python3 compressors/LZSS.py -d -i <*input_file*> -o <*output_binary_file*> [-b <*binary_type*>]
     ```
 The default binary_type is "optimized".
+Currently it only supports macOS because of how we treat the binary files is operating system dependent. However, feel free to edit the code in the main for encoding and decoding. It works on any OS.
 
 ## Evaluation
 - Codes used for evaluation:
