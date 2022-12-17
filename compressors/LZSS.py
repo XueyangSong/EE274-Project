@@ -11,6 +11,7 @@ import hashlib
 from collections import defaultdict, Counter
 import numpy as np
 import pandas as pd
+import argparse
 
 SIZE_BYTE = 32
 MAX_WINDOW_SIZE = 1024 * 100
@@ -663,6 +664,7 @@ class LZSSDecoder(DataDecoder):
         (min_match_len, num_bits_consumed), ret = ed_int_decoder.decode_symbol(rest_table), []
         while num_bits_consumed < len(rest_table):
             # pattern
+            # print(num_bits_consumed, len(rest_table), num_bits_consumed < len(rest_table), rest_table[num_bits_consumed:])
             pattern_len, n = ed_int_decoder.decode_symbol(rest_table[num_bits_consumed:])
             num_bits_consumed += n
             # match length
@@ -1064,41 +1066,103 @@ def tune_hash_search_range(
 
 
 if __name__ == "__main__":
-    UNIT_TESTS = [
-        "abb" * 3 + "cab",
-        "A" * 2 + "B" * 7 + "A" * 2 + "B" * 3 + "CD" * 3,
-        "A" * 2 + "B" * 18 + "C" * 2 + "D" * 2,
-        "A" * 2 + "B" * 18 + "AAB" + "C" * 2 + "D" * 2,
-        "ABCABC",
-        # "A" * 100 + "B" * 99 + "ACCC" * 100 + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 100,
-    ]
-    LARGE_TEST_FILES_W_WINDOW = {
-        "Sign of Four.txt": MAX_WINDOW_SIZE,
-        "Crooked Man.txt": MAX_WINDOW_SIZE,
-        "Sign of Four Spaced.txt": MAX_WINDOW_SIZE,
-        "Verwandlung.txt": MAX_WINDOW_SIZE,
-    }
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-d", "--decompress", help="decompress", action="store_true")
+    parser.add_argument("-c", "--compress", help="compress", action="store_true")
+    parser.add_argument("-i", "--input", help="input file", type=str)
+    parser.add_argument("-o", "--output", help="output file", type=str)
+    parser.add_argument("-t", "--table_type", help="table type", type=str)
+    parser.add_argument("-m", "--find_match_method", help="find match", type=str)
+    parser.add_argument("-b", "--binary_type", help="binary type", type=str)
+    parser.add_argument("-g", "--greedy_optimal", help="greedy optimal", type=str)
 
-    TABLE_TYPE_ARGS = ["shortest"]
-    FIND_MATCH_METHOD_ARGS = ["basic", "hashchain"]
-    BINARY_TYPE_ARGS = ["baseline", "optimized", "fse"]
-    GREEDY_OPTIMAL_ARGS = ["greedy", "optimal"]
+    args = parser.parse_args()
+    if args.decompress and args.compress:
+        print("Invalid. Cannot compress and decompress at the same time!")
+        quit()
 
-    # Algorithm combination comparisons
-    output_path = "../test/result/algorithms_comparisons_long.csv"
-    eval_as_df(
-        LARGE_TEST_FILES_W_WINDOW,
-        TABLE_TYPE_ARGS,
-        BINARY_TYPE_ARGS,
-        GREEDY_OPTIMAL_ARGS,
-        FIND_MATCH_METHOD_ARGS,
-        output_path,
-    )
+    # s = read_as_test_str("Crooked Man.txt")
+    table_type = "shortest"
+    find_match_method = "hashchain"
+    binary_type = "optimized"
+    greedy_optimal = "greedy"
+    window_size = MAX_WINDOW_SIZE
+    hash_num_bytes = HASH_NUM_BYTES
+    num_hash_to_search = NUM_HASH_TO_SEARCH
 
-    # Legnth of hash prefix tuning
-    output_path = "../test/result/prefix_length_tuning_crooked.csv"
-    # tune_hash_num_bytes(LARGE_TEST_FILES_W_WINDOW, GREEDY_OPTIMAL_ARGS, BINARY_TYPE_ARGS, output_path)
+    if args.decompress:
+        if (args.input == None) or (args.output == None):
+            print("Invalid. Need input and output files!")
+            quit()
+        if args.binary_type != None: binary_type = args.binary_type
+        with open(args.input, 'rb') as file:
+            fileContent = file.read()
+        s = BitArray()
+        s.frombytes(fileContent)
+        s = s[:-2]
+        decoded = LZSSDecoder(binary_type).decoding(s)
+        f = open(args.output, "a")
+        f.write(decoded)
+        f.close()
 
-    # Number of prefix searches tuning
-    output_path = "../test/result/prefix_search_range_tuning_sof.csv"
-    # tune_hash_search_range(LARGE_TEST_FILES_W_WINDOW, GREEDY_OPTIMAL_ARGS, BINARY_TYPE_ARGS, output_path)
+    elif args.compress:
+        if (args.input == None) or (args.output == None):
+            print("Invalid. Need input and output files!")
+            quit()
+        s = read_as_test_str(args.input)
+        if args.table_type != None: table_type = args.table_type
+        if args.find_match_method != None: find_match_method = args.find_match_method
+        if args.binary_type != None: binary_type = args.binary_type
+        if args.greedy_optimal != None: greedy_optimal = args.greedy_optimal
+        encoder = LZSSEncoder(
+            table_type,
+            find_match_method,
+            binary_type,
+            greedy_optimal,
+            window_size,
+            hash_num_bytes,
+            num_hash_to_search,
+        )
+        encoded = encoder.encoding(DataBlock(s))
+        f = open(args.output, "ab")
+        f.write(encoded)
+        f.close()
+    else:
+        UNIT_TESTS = [
+            "abb" * 3 + "cab",
+            "A" * 2 + "B" * 7 + "A" * 2 + "B" * 3 + "CD" * 3,
+            "A" * 2 + "B" * 18 + "C" * 2 + "D" * 2,
+            "A" * 2 + "B" * 18 + "AAB" + "C" * 2 + "D" * 2,
+            "ABCABC",
+            # "A" * 100 + "B" * 99 + "ACCC" * 100 + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 100,
+        ]
+        LARGE_TEST_FILES_W_WINDOW = {
+            "Sign of Four.txt": MAX_WINDOW_SIZE,
+            "Crooked Man.txt": MAX_WINDOW_SIZE,
+            "Sign of Four Spaced.txt": MAX_WINDOW_SIZE,
+            "Verwandlung.txt": MAX_WINDOW_SIZE,
+        }
+
+        TABLE_TYPE_ARGS = ["shortest"]
+        FIND_MATCH_METHOD_ARGS = ["basic", "hashchain"]
+        BINARY_TYPE_ARGS = ["baseline", "optimized", "fse"]
+        GREEDY_OPTIMAL_ARGS = ["greedy", "optimal"]
+
+        # Algorithm combination comparisons
+        output_path = "../test/result/algorithms_comparisons_long.csv"
+        eval_as_df(
+            LARGE_TEST_FILES_W_WINDOW,
+            TABLE_TYPE_ARGS,
+            BINARY_TYPE_ARGS,
+            GREEDY_OPTIMAL_ARGS,
+            FIND_MATCH_METHOD_ARGS,
+            output_path,
+        )
+
+        # Length of hash prefix tuning
+        output_path = "../test/result/prefix_length_tuning_crooked.csv"
+        # tune_hash_num_bytes(LARGE_TEST_FILES_W_WINDOW, GREEDY_OPTIMAL_ARGS, BINARY_TYPE_ARGS, output_path)
+
+        # Number of prefix searches tuning
+        output_path = "../test/result/prefix_search_range_tuning_sof.csv"
+        # tune_hash_search_range(LARGE_TEST_FILES_W_WINDOW, GREEDY_OPTIMAL_ARGS, BINARY_TYPE_ARGS, output_path)
