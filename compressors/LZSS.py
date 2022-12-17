@@ -1067,21 +1067,13 @@ def tune_hash_search_range(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-d", "--decompress", help="decompress", action="store_true")
-    parser.add_argument("-c", "--compress", help="compress", action="store_true")
     parser.add_argument("-i", "--input", help="input file", type=str)
-    parser.add_argument("-o", "--output", help="output file", type=str)
     parser.add_argument("-t", "--table_type", help="table type", type=str)
     parser.add_argument("-m", "--find_match_method", help="find match", type=str)
     parser.add_argument("-b", "--binary_type", help="binary type", type=str)
     parser.add_argument("-g", "--greedy_optimal", help="greedy optimal", type=str)
 
     args = parser.parse_args()
-    if args.decompress and args.compress:
-        print("Invalid. Cannot compress and decompress at the same time!")
-        quit()
-
-    # s = read_as_test_str("Crooked Man.txt")
     table_type = "shortest"
     find_match_method = "hashchain"
     binary_type = "optimized"
@@ -1090,29 +1082,29 @@ if __name__ == "__main__":
     hash_num_bytes = HASH_NUM_BYTES
     num_hash_to_search = NUM_HASH_TO_SEARCH
 
-    if args.decompress:
-        if (args.input == None) or (args.output == None):
-            print("Invalid. Need input and output files!")
-            quit()
-        if args.binary_type != None: binary_type = args.binary_type
-        s = BitArray()
-        with open(args.input, 'rb') as fh:
-                s.fromfile(fh)
-        s = s[:-2]
-        decoded = LZSSDecoder(binary_type).decoding(s)
-        f = open(args.output, "a")
-        f.write(decoded)
-        f.close()
+    TABLE_TYPE_ARGS = ["shortest"]
+    FIND_MATCH_METHOD_ARGS = ["basic", "hashchain"]
+    BINARY_TYPE_ARGS = ["baseline", "optimized", "fse"]
+    GREEDY_OPTIMAL_ARGS = ["greedy", "optimal"]
 
-    elif args.compress:
-        if (args.input == None) or (args.output == None):
-            print("Invalid. Need input and output files!")
-            quit()
+    if args.input:
         s = read_as_test_str(args.input)
         if args.table_type != None: table_type = args.table_type
+        if table_type not in TABLE_TYPE_ARGS:
+            print("Invalid table type!")
+            quit()
         if args.find_match_method != None: find_match_method = args.find_match_method
+        if find_match_method not in FIND_MATCH_METHOD_ARGS:
+            print("Invalid find match method!")
+            quit()
         if args.binary_type != None: binary_type = args.binary_type
+        if binary_type not in BINARY_TYPE_ARGS:
+            print("Invalid binary type!")
+            quit()
         if args.greedy_optimal != None: greedy_optimal = args.greedy_optimal
+        if greedy_optimal not in GREEDY_OPTIMAL_ARGS:
+            print("Invalid greedy optimal!")
+            quit()
         encoder = LZSSEncoder(
             table_type,
             find_match_method,
@@ -1123,8 +1115,10 @@ if __name__ == "__main__":
             num_hash_to_search,
         )
         encoded = encoder.encoding(DataBlock(s))
-        with open(args.output, 'wb') as fh:
-            encoded.tofile(fh)
+        decoded = LZSSDecoder(binary_type).decoding(encoded)
+        assert s == decoded
+        quit()
+
     else:
         UNIT_TESTS = [
             "abb" * 3 + "cab",
@@ -1140,11 +1134,6 @@ if __name__ == "__main__":
             "Sign of Four Spaced.txt": MAX_WINDOW_SIZE,
             "Verwandlung.txt": MAX_WINDOW_SIZE,
         }
-
-        TABLE_TYPE_ARGS = ["shortest"]
-        FIND_MATCH_METHOD_ARGS = ["basic", "hashchain"]
-        BINARY_TYPE_ARGS = ["baseline", "optimized", "fse"]
-        GREEDY_OPTIMAL_ARGS = ["greedy", "optimal"]
 
         # Algorithm combination comparisons
         output_path = "../test/result/algorithms_comparisons_long.csv"
