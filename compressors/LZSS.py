@@ -828,7 +828,8 @@ class LZSSDecoder(DataDecoder):
             )
             ptr += pattern_len_list[i]
 
-        if len(pattern[ptr:]) != 0 : ret.append(["".join(pattern[ptr:]), 0, 0])
+        if len(pattern[ptr:]) != 0:
+            ret.append(["".join(pattern[ptr:]), 0, 0])
         return ret
 
     def decoding(self, binary):
@@ -853,6 +854,11 @@ def formSubrange(numerator, denominator):
     return l1, x, l2, numerator - x
 
 
+"""
+Form a uniformly distributed list with input symbols.
+"""
+
+
 def formUniformList(d):
     l = functools.reduce(lambda l, x: l + [x[0]] * x[1], d.items(), [])
     c, ret = Counter(l), []
@@ -865,8 +871,12 @@ def formUniformList(d):
     return ret
 
 
-# make sure sum of total occurences is a power of 2 while maintaining approximately
-# original distribution
+"""
+Make sure sum of total occurences is a power of 2 while maintaining approximately
+original distribution.
+"""
+
+
 def normalizeFrequencies(d):
     n = sum(d.values())
     if math.ceil(math.log2(n)) == math.floor(math.log2(n)):
@@ -1089,19 +1099,23 @@ if __name__ == "__main__":
 
     if args.input:
         s = read_as_test_str(args.input)
-        if args.table_type != None: table_type = args.table_type
+        if args.table_type != None:
+            table_type = args.table_type
         if table_type not in TABLE_TYPE_ARGS:
             print("Invalid table type!")
             quit()
-        if args.find_match_method != None: find_match_method = args.find_match_method
+        if args.find_match_method != None:
+            find_match_method = args.find_match_method
         if find_match_method not in FIND_MATCH_METHOD_ARGS:
             print("Invalid find match method!")
             quit()
-        if args.binary_type != None: binary_type = args.binary_type
+        if args.binary_type != None:
+            binary_type = args.binary_type
         if binary_type not in BINARY_TYPE_ARGS:
             print("Invalid binary type!")
             quit()
-        if args.greedy_optimal != None: greedy_optimal = args.greedy_optimal
+        if args.greedy_optimal != None:
+            greedy_optimal = args.greedy_optimal
         if greedy_optimal not in GREEDY_OPTIMAL_ARGS:
             print("Invalid greedy optimal!")
             quit()
