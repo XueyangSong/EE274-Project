@@ -530,7 +530,7 @@ class LZSSEncoder(DataEncoder):
         patterns = "".join([t for t, _, _ in table])
         d = normalizeFrequencies(dict(Counter(patterns)))
         encoded_pattern_distribution = encoding_ascii_distribution(d)
-        
+
         l = formUniformList(d)
         encoded_pattern = encoding_process(l, patterns)
         ret = (
