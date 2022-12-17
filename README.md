@@ -24,21 +24,16 @@ Here is a list of algorithms implemented.
     ```
 
 ## Running the codes
-- Run unit test codes:
+- Run unit test codes: (Note it takes a long time)
     ```
     python3 compressors/LZSS.py
     ```
-- Compress file:
+- Compress file test:
     ```
-    python3 compressors/LZSS.py -c -i <*input_file*> -o <*output_binary_file*> [-t <*table_type*>] [-m <*find_match_method*>] [-b <*binary_type*>] [-g <*greedy_optimal*>]
+    python3 compressors/LZSS.py -c -i <*input_file*> [-t <*table_type*>] [-m <*find_match_method*>] [-b <*binary_type*>] [-g <*greedy_optimal*>]
     ```
 The default table_type is "shortest". Default find_match_method is "hashchain". Default binary_type is "optimized". Default greedy_optimal is "greedy". Also note that the input file need to be in directory test/.
-- Decompress file:
-    ```
-    python3 compressors/LZSS.py -d -i <*input_file*> -o <*output_binary_file*> [-b <*binary_type*>]
-    ```
-The default binary_type is "optimized".
-Currently it only supports macOS because of how we treat the binary files is operating system dependent. However, feel free to edit the code in the main for encoding and decoding. It works on any OS.
+The command makes sure that the decoding of the encoded file is the same as the original file.
 
 ## Evaluation
 - Codes used for evaluation:
